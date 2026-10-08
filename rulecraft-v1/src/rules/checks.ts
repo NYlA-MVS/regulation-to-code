@@ -287,6 +287,14 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     }
     return pass(`ออกใบไม่ช้ากว่าวัน${label}`)
   },
+  'TI-26': (row) => {
+    const yes = (v: string | undefined) => /^(y|yes|true|1|ใช่|มี)$/i.test(norm(v))
+    const seen = [yes(row.img_handwritten) && 'มีรอยแก้ไขด้วยมือ', yes(row.img_copy) && 'เป็นสำเนา ไม่ใช่ต้นฉบับ', yes(row.img_title_not_printed) && /ใบกำกับภาษี|ใบลดหนี้|ใบเพิ่มหนี้/.test(compact(row.doc_title)) && 'คำว่า "ใบกำกับภาษี" ไม่ได้ตีพิมพ์ (เช่น ประทับตรายางหรือเขียนเอง)'].filter(Boolean)
+    if (isBlank(row.img_handwritten) && isBlank(row.img_copy) && isBlank(row.img_title_not_printed)) return { verdict: 'n/a', evidence: 'ไม่ได้อ่านจากภาพ' }
+    return seen.length
+      ? warn(`จากการอ่านภาพ: ${seen.join(', ')}`, 'ลูกค้าอาจใช้ภาษีซื้อจากใบนี้ไม่ได้ ตรวจต้นฉบับ ถ้ามีการแก้ไขที่ไม่ใช่ที่อยู่หรือเลขผู้เสียภาษีตาม ป.46/2537 ให้ยกเลิกแล้วออกใบใหม่')
+      : pass('จากการอ่านภาพ: ไม่พบรอยแก้ด้วยมือหรือสำเนา')
+  },
   'CN-01': (row) => {
     const t = docType(row)
     if (t === 'INV') return { verdict: 'n/a', evidence: 'ไม่ใช่ใบเพิ่มหนี้/ใบลดหนี้' }

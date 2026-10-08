@@ -13,7 +13,6 @@ mkdirSync(OUT, { recursive: true })
 // ---- helpers --------------------------------------------------------------------------------
 let seed = 20260908
 const rand = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648)
-const pick = (a) => a[Math.floor(rand() * a.length)]
 const tin = (p12) => { let s = 0; for (let i = 0; i < 12; i++) s += Number(p12[i]) * (13 - i); return p12 + ((11 - (s % 11)) % 10) }
 const r2 = (n) => Math.round((n + Math.sign(n) * 1e-9) * 100) / 100
 const dmy = (d, m, y = 2569) => `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`

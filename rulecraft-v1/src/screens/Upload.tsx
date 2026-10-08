@@ -10,8 +10,8 @@ const FileIcon = () => (
   <svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true"><path d="M12 4h17l9 9v29a2 2 0 01-2 2H12a2 2 0 01-2-2V6a2 2 0 012-2z" fill="var(--surface)" stroke="currentColor" strokeWidth="2" /><path d="M29 4v9h9" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M16 23h16M16 29h16M16 35h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
 )
 
-export function Upload({ onFile, onSample, onTemplate, onRules, busy, error, ruleCount }: {
-  onFile: (f: File | undefined) => void; onSample: () => void; onTemplate: () => void; onRules: () => void
+export function Upload({ onFiles, onSample, onTemplate, onRules, busy, error, ruleCount }: {
+  onFiles: (f: File[]) => void; onSample: () => void; onTemplate: () => void; onRules: () => void
   busy: boolean; error: string | null; ruleCount: number
 }) {
   const [dragging, setDragging] = useState(false)
@@ -33,24 +33,25 @@ export function Upload({ onFile, onSample, onTemplate, onRules, busy, error, rul
         <div
           onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
           onDragLeave={() => setDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setDragging(false); onFile(e.dataTransfer.files?.[0]) }}
+          onDrop={(e) => { e.preventDefault(); setDragging(false); onFiles([...(e.dataTransfer.files ?? [])]) }}
           className={`grid content-center justify-items-center gap-4 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${dragging ? 'border-action bg-sunken' : 'border-line-strong'}`}>
           <span className="text-ink-3"><FileIcon /></span>
           <div className="grid gap-1">
-            <p className="text-[1.125rem] font-semibold">{busy ? 'กำลังอ่านไฟล์…' : dragging ? 'ปล่อยเพื่อตรวจ' : 'เลือกไฟล์รายงานภาษีขาย'}</p>
+            <p className="text-[1.125rem] font-semibold">{busy ? 'กำลังอ่านไฟล์…' : dragging ? 'ปล่อยเพื่อตรวจ' : 'เลือกรายงานภาษีขาย หรือใบกำกับภาษี'}</p>
             <p className="hidden text-ink-3 sm:block">หรือลากไฟล์มาวางในกรอบนี้</p>
           </div>
           <label className="btn btn-primary cursor-pointer px-6 text-[1rem]">
             เลือกไฟล์
-            <input id="file" type="file" accept={ACCEPT} className="sr-only" onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = '' }} />
+            <input id="file" type="file" multiple accept={ACCEPT} className="sr-only" onChange={(e) => { onFiles([...(e.target.files ?? [])]); e.target.value = '' }} />
           </label>
-          <p className="flex items-center gap-2 text-[0.9375rem] text-pass"><LockIcon /> ตรวจในเบราว์เซอร์นี้เท่านั้น ไม่มีการส่งไฟล์ออก</p>
+          <p className="flex items-center gap-2 text-[0.9375rem] text-pass"><LockIcon /> Excel, CSV และ PDF ที่มีข้อความ ตรวจในเบราว์เซอร์นี้ ไม่ส่งไฟล์ออก</p>
         </div>
 
         <div className="grid content-start gap-4">
           <h2 className="text-[1.0625rem]">ไฟล์ที่ใช้ได้</h2>
           <ul className="grid gap-2 text-[0.9375rem] text-ink-2">
             <li className="flex gap-2"><Check />Excel (.xlsx, .xls) หรือ CSV ที่ส่งออกจากโปรแกรมบัญชี เช่น Express, FlowAccount, PEAK</li>
+            <li className="flex gap-2"><Check />PDF ใบกำกับภาษี (หลายใบในไฟล์เดียวได้) หรือรูปถ่าย/ภาพสแกน เลือกได้หลายไฟล์พร้อมกัน PDF ที่มีข้อความอ่านในเครื่องนี้ ส่วนภาพสแกนและรูปถ่ายให้ Claude อ่านด้วย API key ของคุณ</li>
             <li className="flex gap-2"><Check />หนึ่งแถวต่อหนึ่งรายการสินค้า หรือหนึ่งแถวต่อหนึ่งใบก็ได้ มีชื่อรายงานอยู่ด้านบนก็ได้</li>
             <li className="flex gap-2"><Check />อย่างน้อยต้องมี เลขที่ใบกำกับ วันที่ เลขผู้เสียภาษีผู้ขาย ชื่อผู้ซื้อ มูลค่า และภาษี</li>
           </ul>

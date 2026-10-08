@@ -7,6 +7,11 @@ Product spin-off of the hackathon prototype in `../regulation-to-code` (kept sep
 ## What v1 does
 
 - Reads `.xlsx`, `.xls` and `.csv`, including UTF-8, UTF-16 and Windows-874 (TIS-620) CSVs saved by Thai Excel
+- Reads invoice PDFs and photos:
+  - PDFs with a text layer are read in the browser (pdf.js + a label-based Thai invoice reader that survives lost tone marks); multi-page invoices are joined
+  - scanned pages and photos are read by Claude (`claude-opus-5-5` by default; Sonnet 5.5 / Haiku 5.5 selectable) with the user's own API key, sent straight from the browser to api.anthropic.com only after the user clicks send; structured output via zod
+  - every extracted value is shown next to the page for the user to confirm or fix; the AI only transcribes, the deterministic rules still decide
+  - TI-26 warns when the image shows handwritten edits, a copy, or a title that is not printed (ประกาศฯ 42 ข้อ 2)
 - Finds the header row automatically when the export has title rows above it; sheet picker for workbooks
 - Groups line-item rows into invoices by seller TIN + branch + book + number; VAT and total may be per line or repeated on every line
 - Deterministic checks, each tied to quoted legal text (see the in-app "ข้อกำหนดที่ตรวจ" page):
@@ -28,7 +33,7 @@ Legal basis and open questions: `reports/กฎหมาย ตรวจใบ�
 
 ## Not yet
 
-e-Tax Invoice XML input, POS abbreviated-invoice reports, checking that a tax ID is actually VAT-registered, purchase-side (input VAT) checks.
+e-Tax Invoice XML input, POS abbreviated-invoice reports, HEIC photos (convert to JPG), checking that a tax ID is actually VAT-registered, purchase-side (input VAT) checks.
 
 ## Develop
 
@@ -38,6 +43,8 @@ npm run dev          # http://localhost:5173
 npm test             # unit tests (vitest)
 npm run build        # single self-contained dist/index.html
 npx vite preview --port 4174 && node e2e/smoke.mjs   # browser smoke test (uses installed Chrome)
+RC_KEY=sk-ant-... node e2e/smoke.mjs                  # also runs the Claude read of the scan/photo trial files (costs ~$0.20)
+node scripts/make-test-files.mjs && node scripts/make-test-docs.mjs   # regenerate test-files/
 ```
 
 `npm run build` emits one HTML file with everything inlined, so it can be hosted anywhere static (GitHub Pages, Netlify, an S3 bucket) or emailed and opened offline.

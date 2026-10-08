@@ -96,7 +96,7 @@ export function toTable(cells: string[][], headerIdx = detectHeaderRow(cells)): 
   return { headers, records, lineNos, headerLine: headerIdx + 1 }
 }
 
-export const ACCEPT = '.csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel'
+export const ACCEPT = '.csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,.pdf,application/pdf,.jpg,.jpeg,.png,.webp,.heic,image/*'
 
 /** Reads a File into sheets. CSV yields one sheet. Throws a Thai message for unsupported files. */
 export async function readFile(file: File): Promise<Sheet[]> {
@@ -109,5 +109,5 @@ export async function readFile(file: File): Promise<Sheet[]> {
       throw new Error('เปิดไฟล์ Excel นี้ไม่ได้ ไฟล์อาจเสียหรือมีรหัสผ่าน ลองบันทึกใหม่เป็น .xlsx หรือ .csv')
     }
   }
-  throw new Error('รองรับไฟล์ .xlsx .xls และ .csv เท่านั้น')
+  throw new Error('รองรับไฟล์ Excel (.xlsx .xls), CSV, PDF และรูป (.jpg .png) เท่านั้น')
 }

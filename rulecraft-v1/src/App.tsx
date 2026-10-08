@@ -1,4 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
+import { aiError, loadAi, readWithClaude, saveAi } from './docs/ai'
+import type { PageImage } from './docs/ai'
+import { IMAGE_TYPES, imageToDataUrl, openPdf, pageLines, renderPage, thumbFrom } from './docs/pdf'
+import { readInvoices } from './docs/textInvoice'
+import { toSheet } from './docs/toSheet'
+import type { ExtractedInvoice } from './docs/types'
+import { Docs } from './screens/Docs'
+import type { AiSettings, PendingPage } from './screens/Docs'
 import { buildIssues } from './io/issues'
 import { filingSummary, likelyTaxMonth } from './io/filing'
 import { download, downloadAnnotated, downloadTemplate, fixListCsv } from './io/report'
@@ -39,10 +48,15 @@ function saveMapping(headers: string[], m: Partial<Record<Field, string>>) {
   }
 }
 
-type Step = 'upload' | 'map' | 'results' | 'rules' | 'help'
-const FLOW: { id: Step; label: string }[] = [
+type Step = 'upload' | 'map' | 'docs' | 'results' | 'rules' | 'help'
+const FLOW_SHEET: { id: Step; label: string }[] = [
   { id: 'upload', label: 'เลือกไฟล์' },
   { id: 'map', label: 'ตรวจคอลัมน์' },
+  { id: 'results', label: 'ผลตรวจ' },
+]
+const FLOW_DOCS: { id: Step; label: string }[] = [
+  { id: 'upload', label: 'เลือกไฟล์' },
+  { id: 'docs', label: 'ตรวจข้อมูล' },
   { id: 'results', label: 'ผลตรวจ' },
 ]
 
@@ -59,6 +73,17 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('issues')
   const [invoiceIdx, setInvoiceIdx] = useState(0)
   const [autoMapped, setAutoMapped] = useState(false)
+  // PDFs and images: read locally from the text layer when possible, otherwise by Claude with the user's key.
+  const [docs, setDocs] = useState<{ files: string[]; invoices: ExtractedInvoice[]; pending: PendingPage[] } | null>(null)
+  const [fromDocs, setFromDocs] = useState(false)
+  const [docBusy, setDocBusy] = useState<string | null>(null)
+  const [docError, setDocError] = useState<string | null>(null)
+  const [docProgress, setDocProgress] = useState<[number, number] | null>(null)
+  const [lastUsage, setLastUsage] = useState<{ input: number; output: number } | null>(null)
+  const [ai, setAiState] = useState<AiSettings>(() => loadAi())
+  const pdfs = useRef(new Map<string, PDFDocumentProxy>())
+  const images = useRef(new Map<string, string>())
+  const abort = useRef<AbortController | null>(null)
 
   const sheet = source?.sheets[sheetIdx]
   const cells = useMemo(() => sheet?.cells ?? [], [sheet])
@@ -87,14 +112,15 @@ export default function App() {
   const coreFields = FIELDS.filter((f) => !EXTRA_FIELDS.includes(f))
   const matchedCount = coreFields.filter((f) => mapping[f]).length
 
-  const open = (name: string, sheets: Sheet[]) => {
+  const open = (name: string, sheets: Sheet[], opts: { fromDocs?: boolean } = {}) => {
     // Pick the sheet whose header row names the most known fields (a summary sheet often comes first).
     const score = (sh: Sheet) => Object.values(autoMap(toTable(sh.cells).headers)).filter(Boolean).length
     const idx = sheets.reduce((best, sh, i) => (score(sh) > score(sheets[best]) ? i : best), 0)
     // Skip the mapping step when every required and recommended field matched on its own (Dromo, OneSchema).
     const t = toTable(sheets[idx]?.cells ?? [])
     const m = { ...autoMap(t.headers), ...loadMapping(t.headers) }
-    const complete = [...REQUIRED, ...RECOMMENDED].every((f) => m[f]) && t.records.length > 0
+    const complete = opts.fromDocs || ([...REQUIRED, ...RECOMMENDED].every((f) => m[f]) && t.records.length > 0)
+    setFromDocs(!!opts.fromDocs)
     setSource({ name, sheets })
     setSheetIdx(idx)
     setHeaderRow(null)
@@ -106,6 +132,80 @@ export default function App() {
     setAutoMapped(complete)
     setStep(complete ? 'results' : 'map')
     window.scrollTo({ top: 0 })
+  }
+  const openDocs = async (files: File[]) => {
+    pdfs.current.clear()
+    images.current.clear()
+    const invoices: ExtractedInvoice[] = []
+    const pending: PendingPage[] = []
+    for (const file of files) {
+      if (/\.pdf$/i.test(file.name)) {
+        const doc = await openPdf(await file.arrayBuffer())
+        pdfs.current.set(file.name, doc)
+        const pages = []
+        for (let n = 1; n <= doc.numPages; n++) pages.push(await pageLines(doc, n))
+        const r = readInvoices(file.name, pages)
+        for (const inv of r.invoices) inv.thumb = await renderPage(doc, inv.pages[0], 480, 0.75)
+        invoices.push(...r.invoices)
+        pending.push(...r.unreadPages.map((page) => ({ file: file.name, page, reason: 'scan' as const })))
+      } else {
+        images.current.set(file.name, await imageToDataUrl(file))
+        pending.push({ file: file.name, page: 1, reason: 'image' })
+      }
+    }
+    setDocs({ files: files.map((f) => f.name), invoices, pending })
+    setDocError(null)
+    setLastUsage(null)
+    setStep('docs')
+    window.scrollTo({ top: 0 })
+  }
+  const pageImage = async (p: PendingPage): Promise<PageImage> => {
+    const doc = pdfs.current.get(p.file)
+    return { file: p.file, page: p.page, dataUrl: doc ? await renderPage(doc, p.page) : images.current.get(p.file)! }
+  }
+  const setAi = (a: AiSettings) => { setAiState(a); saveAi(a) }
+  const readPending = async () => {
+    if (!docs?.pending.length) return
+    const ctl = new AbortController()
+    abort.current = ctl
+    setDocError(null)
+    setDocBusy('กำลังเตรียมภาพ')
+    try {
+      const pages = await Promise.all(docs.pending.map(pageImage))
+      setDocBusy('Claude กำลังอ่าน')
+      const r = await readWithClaude({ apiKey: ai.key, model: ai.model, pages, signal: ctl.signal, onProgress: (d, t) => setDocProgress([d, t]) })
+      for (const inv of r.invoices) if (inv.thumb) inv.thumb = await thumbFrom(inv.thumb, 480)
+      const retried = new Set(docs.pending.filter((x) => x.reason === 'retry').map((x) => `${x.file}#${x.page}`))
+      const kept = docs.invoices.filter((x) => !x.pages.some((n) => retried.has(`${x.file}#${n}`)))
+      const all = [...kept, ...r.invoices].sort((a, b) => docs.files.indexOf(a.file) - docs.files.indexOf(b.file) || a.pages[0] - b.pages[0])
+      setDocs({ ...docs, invoices: all, pending: [] })
+      setLastUsage(r.usage)
+      if (r.skipped.length) setDocError(`Claude ข้าม ${r.skipped.length} หน้าที่ไม่ใช่ใบกำกับภาษี: ${r.skipped.map((x) => `${x.file} หน้า ${x.page}`).join(', ')}`)
+    } catch (e) {
+      if (!ctl.signal.aborted) setDocError(aiError(e))
+    } finally {
+      setDocBusy(null)
+      setDocProgress(null)
+      abort.current = null
+    }
+  }
+  const editDoc = (i: number, f: Field, v: string) => docs && setDocs({ ...docs, invoices: docs.invoices.map((x, k) => (k === i ? { ...x, fields: { ...x.fields, [f]: v }, missing: x.missing.filter((m) => m !== f) } : x)) })
+  const removeDoc = (i: number) => docs && setDocs({ ...docs, invoices: docs.invoices.filter((_, k) => k !== i) })
+  const retryDoc = (i: number) => docs && setDocs({ ...docs, pending: [...docs.pending, ...docs.invoices[i].pages.map((page) => ({ file: docs.invoices[i].file, page, reason: 'retry' as const }))] })
+  const checkDocs = () => docs && open(docs.files.length === 1 ? docs.files[0] : `${docs.files.length} ไฟล์`, [toSheet('เอกสาร', docs.invoices)], { fromDocs: true })
+
+  const onFiles = async (list: File[]) => {
+    if (!list.length) return
+    const docFiles = list.filter((f) => /\.pdf$/i.test(f.name) || IMAGE_TYPES.test(f.name) || /\.(heic|heif)$/i.test(f.name))
+    if (docFiles.length) {
+      if (docFiles.length !== list.length) { setError('เลือกไฟล์ Excel/CSV หรือ PDF/รูป อย่างใดอย่างหนึ่งในแต่ละครั้ง'); return }
+      setBusy(true)
+      setError(null)
+      try { await openDocs(docFiles) } catch (e) { setError(e instanceof Error ? e.message : 'อ่านไฟล์ไม่ได้') } finally { setBusy(false) }
+      return
+    }
+    if (list.length > 1) { setError('เลือกไฟล์ Excel หรือ CSV ทีละไฟล์ (PDF และรูปเลือกได้หลายไฟล์)'); return }
+    return onFile(list[0])
   }
   const onFile = async (file: File | undefined) => {
     if (!file) return
@@ -129,8 +229,9 @@ export default function App() {
   }
   const go = (s: Step) => { setStep(s); window.scrollTo({ top: 0 }) }
 
+  const FLOW = (step === 'docs' || fromDocs) && docs ? FLOW_DOCS : FLOW_SHEET
   const flowIndex = FLOW.findIndex((f) => f.id === step)
-  const readInfo = `อ่าน ${table.records.length} แถวจาก${source && source.sheets.length > 1 ? `ชีต "${sheet?.name}"` : 'ไฟล์'} · หัวคอลัมน์แถวที่ ${table.headerLine} · ${autoMapped ? 'จับคู่คอลัมน์อัตโนมัติ' : 'จับคู่คอลัมน์'} ${matchedCount} จาก ${coreFields.length} ช่อง`
+  const readInfo = fromDocs && docs ? `อ่านจากเอกสาร ${docs.invoices.length} ใบ (${docs.files.join(', ')})` : `อ่าน ${table.records.length} แถวจาก${source && source.sheets.length > 1 ? `ชีต "${sheet?.name}"` : 'ไฟล์'} · หัวคอลัมน์แถวที่ ${table.headerLine} · ${autoMapped ? 'จับคู่คอลัมน์อัตโนมัติ' : 'จับคู่คอลัมน์'} ${matchedCount} จาก ${coreFields.length} ช่อง`
 
   return (
     <div className="min-h-screen">
@@ -165,7 +266,7 @@ export default function App() {
                   <li key={f.id} className="flex items-center gap-2">
                     {i > 0 && <span aria-hidden="true" className="h-px w-3 bg-line-strong sm:w-8" />}
                     <button type="button" disabled={!enabled || current} aria-current={current ? 'step' : undefined}
-                      onClick={() => (f.id === 'results' ? toResults() : go(f.id))}
+                      onClick={() => (f.id === 'results' ? (fromDocs || step === 'docs' ? checkDocs() : toResults()) : go(f.id))}
                       className={`flex min-h-11 items-center gap-1.5 rounded-full pr-1 pl-0.5 whitespace-nowrap sm:gap-2 sm:pr-3 sm:pl-1 ${current ? 'font-semibold text-ink' : enabled ? 'text-ink-2 hover:text-ink' : 'text-ink-3'}`}>
                       <span className={`num grid size-7 place-items-center rounded-full text-[0.875rem] font-semibold ${current ? 'bg-action text-on-action' : done ? 'bg-pass-bg text-pass' : 'border border-line-strong text-ink-3'}`}>
                         {done ? <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" stroke="currentColor" strokeWidth="2.4" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg> : i + 1}
@@ -181,8 +282,13 @@ export default function App() {
 
         <div className="screen-only">
           {step === 'upload' && (
-            <Upload busy={busy} error={error} ruleCount={CLAUSES.length} onFile={onFile} onTemplate={downloadTemplate} onRules={() => go('rules')}
+            <Upload busy={busy} error={error} ruleCount={CLAUSES.length} onFiles={onFiles} onTemplate={downloadTemplate} onRules={() => go('rules')}
               onSample={() => open('โรงงานตัวอย่าง.csv', [{ name: 'ตัวอย่าง', cells: parseCsv(factoryCsv) }])} />
+          )}
+          {step === 'docs' && docs && (
+            <Docs files={docs.files} invoices={docs.invoices} pending={docs.pending} busy={docBusy} error={docError} progress={docProgress}
+              ai={ai} setAi={setAi} lastUsage={lastUsage} onRead={readPending} onCancel={() => abort.current?.abort()}
+              onRetry={retryDoc} onEdit={editDoc} onRemove={removeDoc} onCheck={checkDocs} onBack={() => go('upload')} />
           )}
           {step === 'map' && source && (
             <Mapping fileName={source.name} sheets={source.sheets.map((s) => s.name)} sheetIdx={sheetIdx} setSheetIdx={(i) => { setSheetIdx(i); setHeaderRow(null) }}
@@ -195,7 +301,7 @@ export default function App() {
             <Results fileName={source.name} invoices={invoices} results={results} issues={issues} filing={filing} taxMonth={taxMonth} vatPct={vatPct}
               gaps={gaps} unknownBuyerVat={unknownBuyerVat} readInfo={readInfo} ruleCount={CLAUSES.length}
               tab={tab} setTab={setTab} invoiceIdx={invoiceIdx} setInvoiceIdx={setInvoiceIdx}
-              onMapping={() => go('map')} onPrint={() => window.print()}
+              onMapping={() => go(fromDocs && docs ? 'docs' : 'map')} mappingLabel={fromDocs && docs ? 'แก้ข้อมูลที่อ่านได้' : 'ตรวจการจับคู่คอลัมน์'} onPrint={() => window.print()}
               onFixList={() => download(`รายการต้องแก้-${source.name.replace(/\.[^.]+$/, '')}.csv`, fixListCsv(invoices, results))}
               onAnnotated={() => downloadAnnotated(source.name, table.headers, table.records, table.lineNos, invoices, results)} />
           )}
@@ -210,7 +316,7 @@ export default function App() {
 
       <footer className="screen-only border-t border-line">
         <p className="mx-auto max-w-[72rem] px-4 py-5 text-[0.875rem] text-ink-3 sm:px-6">
-          Rulecraft ช่วยตรวจตัวเองเบื้องต้น ไม่ใช่คำวินิจฉัยของกรมสรรพากร ข้อความกฎหมายฉบับทางการ ผู้สอบบัญชี หรือที่ปรึกษาภาษีของคุณเป็นผู้ตัดสิน · ไฟล์ของคุณไม่ถูกส่งออกจากเบราว์เซอร์นี้
+          Rulecraft ช่วยตรวจตัวเองเบื้องต้น ไม่ใช่คำวินิจฉัยของกรมสรรพากร ข้อความกฎหมายฉบับทางการ ผู้สอบบัญชี หรือที่ปรึกษาภาษีของคุณเป็นผู้ตัดสิน · Excel, CSV และ PDF ที่มีข้อความตรวจในเบราว์เซอร์นี้ ภาพสแกนและรูปถ่ายส่งให้ Claude อ่านเฉพาะเมื่อคุณกดยืนยัน
         </p>
       </footer>
     </div>

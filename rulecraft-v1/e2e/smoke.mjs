@@ -21,7 +21,7 @@ const upload = async (file) => { await page.goto(URL); await page.locator('#file
 
 await page.goto(URL)
 ok(await seen(page.getByRole('heading', { name: 'ตรวจใบกำกับภาษีขาย ก่อนยื่น ภ.พ.30' })), 'upload: page heading')
-ok(await seen(page.getByText('ตรวจในเบราว์เซอร์นี้เท่านั้น ไม่มีการส่งไฟล์ออก')), 'upload: privacy promise next to the button')
+ok(await seen(page.getByText('Excel, CSV และ PDF ที่มีข้อความ ตรวจในเบราว์เซอร์นี้ ไม่ส่งไฟล์ออก')), 'upload: privacy promise next to the button')
 await page.screenshot({ path: `${OUT}/1-upload.png`, fullPage: true })
 
 // Sample: every column matches, so the mapping step is skipped
@@ -95,7 +95,7 @@ ok(await seen(page.getByText(/Excel ตัดเลข 0/).first()), 'xlsx: lead
 
 // Non-spreadsheet rejected
 await upload({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
-ok(await seen(page.getByRole('alert').getByText('รองรับไฟล์ .xlsx .xls และ .csv เท่านั้น')), 'txt: rejected with message')
+ok(await seen(page.getByRole('alert').getByText('รองรับไฟล์ Excel (.xlsx .xls), CSV, PDF และรูป (.jpg .png) เท่านั้น')), 'txt: rejected with message')
 
 // No buyer-VAT column: mapping step shown, then a file-level note and a warning
 await upload(csvFile('novat.csv', [
@@ -160,6 +160,33 @@ for (const [file, verdict] of TRIALS) {
 await page.goto(URL)
 await page.locator('#file').setInputFiles('test-files/07-ขาดคอลัมน์ภาษีมูลค่าเพิ่ม.xlsx')
 ok(await seen(page.getByRole('alert').getByText('ยังขาดช่องจำเป็น 1 ช่อง')), 'trial 07: blocked, VAT column missing')
+
+// PDF with a text layer: read in this browser, confirmed, then checked
+await page.goto(URL)
+await page.locator('#file').setInputFiles('test-files/09-ใบกำกับภาษี-PDF-จากโปรแกรม-5ใบ.pdf')
+ok(await seen(page.getByText(/อ่านได้ 5 ใบ \(5 ใบอ่านจากข้อความในไฟล์ PDF ในเครื่องนี้\)/)), 'pdf 09: 5 invoices read locally')
+await page.locator('#doc-1-buyer_branch').fill('สาขาที่ 00002')
+await page.getByRole('button', { name: /^ตรวจ 5 ใบ$/ }).click()
+ok(await seen(page.getByRole('heading', { name: 'ต้องแก้ 1 เรื่อง ใน 1 ใบ ก่อนยื่น ภ.พ.30' })), 'pdf 09: edited branch accepted; VAT error found')
+ok(await seen(page.getByText(/อ่านจากเอกสาร 5 ใบ/)), 'pdf 09: results say the data came from documents')
+await page.getByRole('button', { name: 'แก้ข้อมูลที่อ่านได้' }).click()
+ok((await page.locator('#doc-1-buyer_branch').inputValue()) === 'สาขาที่ 00002', 'pdf 09: edits kept when going back')
+
+// Scans and photos: consent panel; the AI read runs only when a key is provided (RC_KEY), since it costs money
+await page.goto(URL)
+await page.locator('#file').setInputFiles(['test-files/11-ใบกำกับภาษี-สแกน-3ใบ.pdf', 'test-files/10-ใบกำกับภาษี-ถ่ายรูปมือถือ-มีแก้ด้วยปากกา.jpg', 'test-files/12-ใบลดหนี้-สแกน.jpg'])
+ok(await seen(page.getByRole('heading', { name: '5 หน้าต้องให้ Claude อ่าน' })), 'scans: 5 pages wait for Claude, nothing sent yet')
+ok(await page.getByRole('button', { name: 'ส่ง 5 หน้าให้ Claude อ่าน' }).isDisabled(), 'scans: send blocked without a key')
+if (process.env.RC_KEY) {
+  await page.locator('#ai-key').fill(process.env.RC_KEY)
+  await page.getByRole('button', { name: 'ส่ง 5 หน้าให้ Claude อ่าน' }).click()
+  ok(await page.getByText(/อ่านได้ 5 ใบ \(อ่านโดย Claude\)/).waitFor({ timeout: 240000 }).then(() => true, () => false), 'scans: Claude read 5 documents')
+  await page.getByRole('button', { name: /^ตรวจ 5 ใบ$/ }).click()
+  ok(await seen(page.getByRole('heading', { name: /ต้องแก้ 1 เรื่อง ใน 1 ใบ/ })), 'scans: the receipt (no "ใบกำกับภาษี") must be fixed')
+  // The page does not say whether the buyer is VAT-registered, so a wrong buyer TIN is a warning
+  ok(await seen(page.locator('article.issue').filter({ hasText: 'เลขผู้เสียภาษีของผู้ซื้อ' }).getByText('IV6909-0403')), 'scans: wrong buyer TIN digit reported')
+  ok(await seen(page.locator('article.issue').filter({ hasText: 'ภาพเอกสารมีรอยแก้ด้วยมือ' }).getByText('IV6909-0301')), 'scans: handwritten correction flagged from the photo')
+} else console.log('SKIP scans: set RC_KEY to run the Claude read')
 
 // Phone width, both themes: no horizontal page scroll
 for (const scheme of ['light', 'dark']) {

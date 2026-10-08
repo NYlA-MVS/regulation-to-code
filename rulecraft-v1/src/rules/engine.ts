@@ -12,6 +12,8 @@ export const FIELDS = [
   // Optional fields for credit/debit notes, cancellations, currency, VAT category and tax point.
   'doc_type', 'status', 'replaces_invoice_no', 'ref_invoice_no', 'original_value', 'correct_value', 'reason',
   'currency', 'exchange_rate', 'vat_category', 'channel', 'delivery_date', 'payment_date',
+  // What the AI reader saw on a scanned or photographed invoice (only filled for PDF/image input).
+  'img_handwritten', 'img_copy', 'img_title_not_printed',
 ] as const
 export const EXTRA_FIELDS: readonly Field[] = FIELDS.slice(FIELDS.indexOf('doc_type'))
 export type Field = (typeof FIELDS)[number]
@@ -25,6 +27,7 @@ export const FIELD_LABEL: Record<Field, string> = {
   doc_type: 'ประเภทเอกสาร', status: 'สถานะ (ยกเลิก)', replaces_invoice_no: 'ออกแทนใบเลขที่', ref_invoice_no: 'อ้างอิงใบกำกับเดิม',
   original_value: 'มูลค่าตามใบเดิม', correct_value: 'มูลค่าที่ถูกต้อง', reason: 'เหตุผล', currency: 'สกุลเงิน', exchange_rate: 'อัตราแลกเปลี่ยน',
   vat_category: 'ประเภทภาษี (ปกติ/0%/ยกเว้น)', channel: 'ช่องทาง (กระดาษ/e-Tax)', delivery_date: 'วันส่งมอบ', payment_date: 'วันรับชำระ',
+  img_handwritten: 'จากภาพ: มีรอยแก้ด้วยมือ', img_copy: 'จากภาพ: เป็นสำเนา', img_title_not_printed: 'จากภาพ: คำว่าใบกำกับภาษีไม่ได้ตีพิมพ์',
 }
 
 // Header names we recognise for each field (English keys plus common Thai headers).
@@ -61,6 +64,9 @@ const SYNONYMS: Record<Field, string[]> = {
   channel: ['ช่องทาง', 'channel'],
   delivery_date: ['วันส่งมอบ', 'วันที่ส่งของ', 'delivery date'],
   payment_date: ['วันรับชำระ', 'วันที่รับเงิน', 'payment date'],
+  img_handwritten: ['จากภาพ: มีรอยแก้ด้วยมือ'],
+  img_copy: ['จากภาพ: เป็นสำเนา'],
+  img_title_not_printed: ['จากภาพ: คำว่าใบกำกับภาษีไม่ได้ตีพิมพ์'],
 }
 
 const key = (s: string) => norm(s).toLowerCase().replace(/[\s_]+/g, ' ')
@@ -178,6 +184,7 @@ const MUTATORS: Record<ClauseId, (r: Row) => Mutant> = {
   'CN-02': (r) => ({ ...r, doc_type: 'CN', doc_title: 'ใบลดหนี้', ref_invoice_no: '' }),
   'CN-03': (r) => ({ ...r, doc_type: 'CN', doc_title: 'ใบลดหนี้', original_value: '', correct_value: '' }),
   'CN-04': (r) => ({ ...r, doc_type: 'CN', doc_title: 'ใบลดหนี้', reason: '' }),
+  'TI-26': (r) => ({ ...r, img_handwritten: 'Y' }),
 }
 
 const isWrapped = (m: Mutant): m is Wrapped => typeof m.row === 'object'

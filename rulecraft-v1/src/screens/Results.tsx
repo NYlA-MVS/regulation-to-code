@@ -22,7 +22,7 @@ export function Results(p: {
   fileName: string; invoices: Invoice[]; results: RowResults[]; issues: Issue[]; filing: FilingRow[]; taxMonth?: string; vatPct: number
   gaps: Gap[]; unknownBuyerVat: number; readInfo: string; ruleCount: number
   tab: Tab; setTab: (t: Tab) => void; invoiceIdx: number; setInvoiceIdx: (i: number) => void
-  onMapping: () => void; onFixList: () => void; onAnnotated: () => void; onPrint: () => void
+  onMapping: () => void; mappingLabel: string; onFixList: () => void; onAnnotated: () => void; onPrint: () => void
 }) {
   const { invoices, results, issues } = p
   const levels = results.map((r) => worst(Object.values(r).map((x) => x?.verdict)))
@@ -91,7 +91,7 @@ export function Results(p: {
 
       <p className="flex flex-wrap items-center gap-x-2 text-[0.9375rem] text-ink-3">
         <span>{p.readInfo}</span>
-        <button type="button" onClick={p.onMapping} className="link">ตรวจการจับคู่คอลัมน์</button>
+        <button type="button" onClick={p.onMapping} className="link">{p.mappingLabel}</button>
       </p>
 
       {/* Workspace tabs */}
