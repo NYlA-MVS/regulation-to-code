@@ -1,0 +1,9 @@
+﻿row,invoice_no,TI-01,TI-02,TI-03,TI-04,TI-05,TI-06,TI-06b,TI-07,TI-08,TI-09,TI-10,planted
+1,B-001,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,clean
+2,B-002,fail,pass,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,title lacks ใบกำกับภาษี
+3,B-003,pass,pass,fail,pass,pass,pass,pass,pass,pass,pass,pass,buyer address missing
+4,B-004,pass,pass,pass,pass,pass,fail,n/a,pass,pass,pass,pass,VAT not shown separately
+5,B-005,pass,pass,pass,pass,pass,pass,pass,pass,fail,n/a,n/a,seller head office/branch missing
+6,B-006,pass,pass,pass,pass,pass,pass,pass,pass,pass,fail,pass,"VAT-registered buyer, tax ID missing"
+7,B-007,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,HQ notation (valid)
+8,B-008,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,clean
