@@ -26,16 +26,19 @@ await page.getByRole('button', { name: 'ตรวจ 8 ใบ' }).click()
 const stats = await page.locator('.num.text-\\[1\\.75rem\\]').allInnerTexts()
 ok(JSON.stringify(stats) === JSON.stringify(['8', '3', '5', '0']), `results stats ${stats}`)
 await page.screenshot({ path: `${OUT}/3-results.png`, fullPage: true })
+ok(await seen(page.locator('section.screen-only').getByText('สรุปสำหรับยื่น ภ.พ.30')), 'F-01: filing summary shown')
+ok(await seen(page.locator('section.screen-only').getByText(/เดือนภาษี ก\.ย\. 2569 · ยื่นแบบกระดาษภายใน/)), 'F-01: tax month auto-detected as ก.ย. 2569')
+ok(await seen(page.locator('section.screen-only b', { hasText: '23 ต.ค. 2569' })), 'F-01: online deadline 23 ต.ค. 2569')
 await page.getByRole('button', { name: 'ใบที่ 4 มีข้อไม่ผ่าน' }).click()
 ok(await page.getByText(/รายการที่ 2: จำนวน/).first().isVisible(), 'audit: multi-line invoice names failing line')
 await page.screenshot({ path: `${OUT}/4-audit-multiline.png`, fullPage: true })
 
 const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /ดาวน์โหลดรายการที่ต้องแก้/ }).click()])
 const csv = readFileSync(await dl.path(), 'utf8')
-ok(dl.suggestedFilename().endsWith('.csv') && csv.includes('SP6911-006') && csv.charCodeAt(0) === 0xfeff, `fix list downloaded: ${dl.suggestedFilename()}`)
+ok(dl.suggestedFilename().endsWith('.csv') && csv.includes('SP6909-006') && csv.charCodeAt(0) === 0xfeff, `fix list downloaded: ${dl.suggestedFilename()}`)
 
 await page.getByRole('button', { name: 'ดูภาพรวมทุกใบ' }).click()
-ok((await page.locator('.screen-only tbody tr').count()) === 5, 'matrix: shows only the 5 problem invoices by default')
+ok((await page.locator('table:has(th:text("ใบที่ / เลขที่")) tbody tr').count()) === 5, 'matrix: shows only the 5 problem invoices by default')
 await page.screenshot({ path: `${OUT}/5-matrix.png`, fullPage: true })
 
 // Print shows only the report
@@ -69,8 +72,8 @@ ok(await seen(page.getByRole('alert').getByText('รองรับไฟล์ 
 // No buyer-VAT column: file-level notice, and a buyer TIN without branch is a warning
 const noVat = [
   'เลขที่ใบกำกับ,วันที่,ชื่อเอกสาร,ชื่อผู้ขาย,ที่อยู่ผู้ขาย,เลขผู้เสียภาษีผู้ขาย,สาขาผู้ขาย,ชื่อลูกค้า,ที่อยู่ลูกค้า,เลขผู้เสียภาษีลูกค้า,สาขาลูกค้า,รายการ,จำนวน,มูลค่าก่อน VAT,ภาษีมูลค่าเพิ่ม,รวมทั้งสิ้น',
-  'N-1,8 ต.ค. 2569,TAX INVOICE,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,นายสมชาย ใจดี,2 ถ.สอง,,,น็อต,10,100.00,7.00,107.00',
-  'N-2,9 ต.ค. 2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,3 ถ.สาม,0105547003211,,สกรู,5,50.00,3.50,53.50',
+  'N-1,1 ต.ค. 2569,TAX INVOICE,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,นายสมชาย ใจดี,2 ถ.สอง,,,น็อต,10,100.00,7.00,107.00',
+  'N-2,2 ต.ค. 2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,3 ถ.สาม,0105547003211,,สกรู,5,50.00,3.50,53.50',
 ].join('\n')
 await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
 await page.locator('#file').setInputFiles({ name: 'novat.csv', mimeType: 'text/csv', buffer: Buffer.from(noVat) })

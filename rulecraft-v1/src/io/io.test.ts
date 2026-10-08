@@ -68,7 +68,7 @@ describe('factory sample (multi-line invoices)', () => {
     expect(csv.startsWith('﻿')).toBe(true)
     const parsed = Papa.parse<string[]>(csv.slice(1)).data
     expect(parsed.length).toBe(1 + problems(results).length)
-    expect(parsed[1][1]).toBe('SP6911-003')
+    expect(parsed[1][1]).toBe('SP6909-003')
     expect(parsed[1][4]).toBe('10')
   })
 })

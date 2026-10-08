@@ -1,6 +1,6 @@
 // Approved clauses for the full tax invoice rule pack. Source text is quoted from rd.go.th.
 
-export type ClauseId = 'TI-01' | 'TI-02' | 'TI-03' | 'TI-04' | 'TI-05' | 'TI-06' | 'TI-06b' | 'TI-07' | 'TI-08' | 'TI-09' | 'TI-10' | 'TI-11' | 'TI-15'
+export type ClauseId = 'TI-01' | 'TI-02' | 'TI-03' | 'TI-04' | 'TI-05' | 'TI-06' | 'TI-06b' | 'TI-07' | 'TI-08' | 'TI-09' | 'TI-10' | 'TI-11' | 'TI-13' | 'TI-14' | 'TI-15' | 'TI-24'
 
 export interface Clause {
   id: ClauseId
@@ -26,7 +26,10 @@ export const CLAUSES: Clause[] = [
   { id: 'TI-06', source: `${S86_4} (6)`, quote: 'จำนวนภาษีมูลค่าเพิ่มที่คำนวณจากมูลค่าของสินค้าหรือของบริการ โดยให้แยกออกจากมูลค่า', plain: 'แสดงภาษีมูลค่าเพิ่มแยกจากมูลค่าสินค้า', fields: ['vat_amount'], status: 'checkable', since: 'v2558' },
   { id: 'TI-06b', source: `${S86_4} (6) การคำนวณ`, quote: 'จำนวนภาษีมูลค่าเพิ่มที่คำนวณจากมูลค่าของสินค้าหรือของบริการ', plain: 'ยอดภาษีตรงกับมูลค่า × อัตราภาษีที่ตั้งไว้', fields: ['amount_ex_vat', 'vat_amount'], status: 'partial', since: 'v2558' },
   { id: 'TI-11', source: `${P86} ข้อ 9`, quote: 'มูลค่ารวมของสินค้าหรือของบริการและจำนวนภาษีมูลค่าเพิ่มที่ระบุในใบกำกับภาษี และที่ระบุในใบแนบใบกำกับภาษีต้องเป็นจำนวนเดียวกัน', plain: 'ยอดรวมทั้งสิ้นเท่ากับมูลค่าบวกภาษี', fields: ['amount_ex_vat', 'vat_amount', 'total'], status: 'partial', since: 'v2558' },
+  { id: 'TI-13', source: 'ประมวลรัษฎากร มาตรา 80 และพระราชกฤษฎีกา (ฉบับที่ 807) พ.ศ. 2569', quote: 'อัตราภาษีตามวรรคหนึ่งให้ลดลงได้โดยตราเป็นพระราชกฤษฎีกา แต่ต้องกำหนดอัตราภาษีให้เป็นอัตราภาษีเดียวกันสำหรับการขายสินค้า การให้บริการ และการนำเข้าทุกกรณี', plain: 'อัตรา VAT ตรงกับอัตราตามกฎหมาย ณ วันที่ในใบ', fields: ['issue_date'], status: 'checkable', since: 'v2558' },
+  { id: 'TI-14', source: 'ประมวลรัษฎากร มาตรา 86 และมาตรา 83', quote: 'ต้องจัดทำในทันทีที่ความรับผิดในการเสียภาษีมูลค่าเพิ่มเกิดขึ้น', plain: 'วันที่อยู่ในเดือนภาษีที่จะยื่น และไม่ใช่วันในอนาคต', fields: ['issue_date'], status: 'partial', since: 'v2558' },
   { id: 'TI-15', source: `${P86} ข้อ 9(2)`, quote: 'แต่ละแผ่นต้องมีรายการถูกต้องครบถ้วนตามมาตรา 86/4 (1) - (5) และ (7)', plain: 'ทุกบรรทัดของใบเดียวกันมีหัวใบตรงกัน', fields: ['issue_date', 'doc_title', 'buyer_name', 'buyer_tax_id', 'buyer_branch'], status: 'checkable', since: 'v2558' },
+  { id: 'TI-24', source: 'ประกาศอธิบดีกรมสรรพากร เกี่ยวกับภาษีมูลค่าเพิ่ม (ฉบับที่ 42) ข้อ 2(2)', quote: 'ภาษีซื้อตามใบกำกับภาษีอย่างย่อตามมาตรา 86/6 และมาตรา 86/7', plain: 'ไม่ออกใบกำกับภาษีอย่างย่อให้ผู้ซื้อที่จด VAT', fields: ['doc_title', 'buyer_is_vat_registrant'], status: 'checkable', since: 'v2558' },
   { id: 'TI-07', source: `${S86_4} (7)`, quote: 'วัน เดือน ปี ที่ออกใบกำกับภาษี', plain: 'วันที่ออกใบกำกับภาษีที่เป็นวันจริง', fields: ['issue_date'], status: 'checkable', since: 'v2558' },
   { id: 'TI-08', source: `${DG199} ข้อ 8`, quote: 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ประกอบการที่ออกใบกำกับภาษี', plain: 'ระบุสำนักงานใหญ่หรือสาขาของผู้ขาย', fields: ['seller_branch'], status: 'checkable', since: 'v2026' },
   { id: 'TI-09', source: `${DG199} ข้อ 7`, quote: 'เลขประจำตัวผู้เสียภาษีอากรของผู้ซื้อสินค้าหรือผู้รับบริการ', plain: 'เลขผู้เสียภาษีของผู้ซื้อ (ตรวจเมื่อผู้ซื้อจด VAT)', fields: ['buyer_tax_id', 'buyer_is_vat_registrant'], status: 'needs_expert', since: 'v2026' },

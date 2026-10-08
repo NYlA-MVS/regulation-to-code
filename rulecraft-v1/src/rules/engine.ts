@@ -66,12 +66,17 @@ export function applyMapping(raw: Record<string, string>[], mapping: Record<Fiel
 export type RowResults = Partial<Record<ClauseId, Result>>
 
 /** `lines` gives the line items of each row when rows are grouped invoices (see groupInvoices). */
-export function runPack(rows: Row[], pack: PackId, vatRate: number, lines?: Row[][]): RowResults[] {
+export interface RunOptions {
+  taxMonth?: string
+  today?: Date
+}
+
+export function runPack(rows: Row[], pack: PackId, vatRate: number, lines?: Row[][], opts: RunOptions = {}): RowResults[] {
   const ids = PACKS[pack].clauses as readonly ClauseId[]
   const seen = new Set<string>()
   return rows.map((row, i) => {
     const res: RowResults = {}
-    for (const id of ids) res[id] = CHECKS[id](row, { vatRate, seen, lines: lines?.[i] })
+    for (const id of ids) res[id] = CHECKS[id](row, { vatRate, seen, lines: lines?.[i], ...opts })
     if (norm(row.invoice_no)) seen.add(invoiceKey(row))
     return res
   })
@@ -124,16 +129,19 @@ const MUTATORS: Record<ClauseId, (r: Row) => Row | { row: Row; lines: Row[] }> =
   'TI-09': (r) => ({ ...r, buyer_tax_id: r.buyer_tax_id.slice(0, -1) + String((Number(r.buyer_tax_id.slice(-1)) + 1) % 10) }),
   'TI-10': (r) => ({ ...r, buyer_branch: '' }),
   'TI-11': (r) => ({ ...r, total: String((parseFloat(r.total.replace(/,/g, '')) || 0) + 5) }),
+  'TI-13': (r) => ({ ...r, issue_date: '2099-01-01' }),
+  'TI-14': (r) => ({ ...r, issue_date: '2099-01-01' }),
   'TI-15': (r) => ({ row: r, lines: [r, { ...r, issue_date: '1999-01-01' }] }),
+  'TI-24': (r) => ({ ...r, doc_title: 'ใบกำกับภาษีอย่างย่อ', buyer_is_vat_registrant: 'Y' }),
 }
 
-export function mutationTest(rows: Row[], vatRate: number) {
+export function mutationTest(rows: Row[], vatRate: number, opts: RunOptions = {}) {
   return CLAUSES.map((c) => {
-    const ctx = { vatRate, seen: new Set<string>() }
+    const ctx = { vatRate, seen: new Set<string>(), ...opts }
     const idx = rows.findIndex((r) => CHECKS[c.id](r, ctx).verdict === 'pass')
     if (idx < 0) return { clause: c, row: null as number | null, killed: false, after: null as Result | null }
     const m = MUTATORS[c.id](rows[idx])
-    const after = 'lines' in m && Array.isArray(m.lines) ? CHECKS[c.id](m.row as Row, { vatRate, seen: new Set(), lines: m.lines as Row[] }) : CHECKS[c.id](m as Row, { vatRate, seen: new Set() })
+    const after = 'lines' in m && Array.isArray(m.lines) ? CHECKS[c.id](m.row as Row, { vatRate, seen: new Set(), lines: m.lines as Row[], ...opts }) : CHECKS[c.id](m as Row, { vatRate, seen: new Set(), ...opts })
     return { clause: c, row: idx + 1, killed: after.verdict === 'fail' || after.verdict === 'warn', after }
   })
 }
@@ -218,6 +226,6 @@ export function groupInvoices(rows: Row[], vatRate: number, lineNos: number[] = 
   return out
 }
 
-export function runInvoices(invoices: Invoice[], pack: PackId, vatRate: number): RowResults[] {
-  return runPack(invoices.map((x) => x.row), pack, vatRate, invoices.map((x) => x.lines))
+export function runInvoices(invoices: Invoice[], pack: PackId, vatRate: number, opts: RunOptions = {}): RowResults[] {
+  return runPack(invoices.map((x) => x.row), pack, vatRate, invoices.map((x) => x.lines), opts)
 }

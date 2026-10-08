@@ -25,7 +25,7 @@ describe.each(['shop-a', 'shop-b', 'evasion'])('%s', (name) => {
     expect(cmp.total).toBe(expected.length * 11)
   })
   it('kills every mutant', () => {
-    const m = mutationTest(rows, 0.07)
+    const m = mutationTest(rows, 0.07, { today: new Date('2026-12-31') })
     expect(m.filter((x) => !x.killed).map((x) => x.clause.id)).toEqual([])
   })
 })

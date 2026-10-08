@@ -4,6 +4,9 @@ import { Audit } from './Audit'
 import { ACCEPT, detectHeaderRow, parseCsv, readFile, toTable } from './io/table'
 import type { Sheet } from './io/table'
 import { download, downloadTemplate, fixListCsv, lineRange, problems } from './io/report'
+import { branchLabel, filingSummary, likelyTaxMonth } from './io/filing'
+import type { FilingRow } from './io/filing'
+import { filingDeadlines, thaiDate, thaiMonth } from './rules/rates'
 import checksSource from './rules/checks.ts?raw'
 import type { Verdict } from './rules/checks'
 import { CLAUSES, PACKS } from './rules/clauses'
@@ -94,6 +97,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [vatPct, setVatPct] = useState(7)
+  const [taxMonthPick, setTaxMonthPick] = useState<string | null>(null)
   const [edits, setEdits] = useState<{ key: string; m: Partial<Record<Field, string>> } | null>(null)
   const [view, setView] = useState<'audit' | 'matrix'>('audit')
   const [onlyProblems, setOnlyProblems] = useState(true)
@@ -112,7 +116,9 @@ export default function App() {
   const vatRate = vatPct / 100
   const rows = useMemo(() => applyMapping(table.records, mapping), [table, mapping])
   const invoices = useMemo(() => groupInvoices(rows, vatRate, table.lineNos), [rows, vatRate, table.lineNos])
-  const results = useMemo(() => runInvoices(invoices, PACK, vatRate), [invoices, vatRate])
+  const taxMonth = taxMonthPick ?? likelyTaxMonth(invoices) ?? undefined
+  const results = useMemo(() => runInvoices(invoices, PACK, vatRate, { taxMonth }), [invoices, vatRate, taxMonth])
+  const filing = useMemo(() => filingSummary(invoices, results), [invoices, results])
   const sum = useMemo(() => summary(results), [results])
   const probs = useMemo(() => problems(results), [results])
   const activeClauses = CLAUSES.filter((c) => (PACKS[PACK].clauses as readonly string[]).includes(c.id))
@@ -126,6 +132,7 @@ export default function App() {
     setSource({ name, sheets })
     setSheetIdx(Math.max(0, sheets.findIndex((s) => s.cells.some((r) => r.some((v) => v.trim())))))
     setHeaderRow(null)
+    setTaxMonthPick(null)
     setInvoiceIdx(0)
     setCell(null)
     setView('audit')
@@ -242,6 +249,11 @@ export default function App() {
                 className="num h-9 w-20 rounded-lg border border-line bg-paper px-2" />
             </label>
             <label className="grid gap-1">
+              <span className="text-[0.8125rem] font-semibold text-ink-2">เดือนภาษีที่จะยื่น</span>
+              <input id="tax-month" type="month" value={taxMonth ?? ''} onChange={(e) => setTaxMonthPick(e.target.value || null)}
+                className="num h-9 rounded-lg border border-line bg-paper px-2" />
+            </label>
+            <label className="grid gap-1">
               <span className="text-[0.8125rem] font-semibold text-ink-2">อัตรา VAT (%)</span>
               <input id="vat" type="number" min={0} max={20} step={0.5} value={vatPct} onChange={(e) => setVatPct(Number(e.target.value) || 0)}
                 className="num h-9 w-20 rounded-lg border border-line bg-paper px-2" />
@@ -305,6 +317,8 @@ export default function App() {
               </div>
             )}
           </div>
+
+          <Filing rows={filing} taxMonth={taxMonth} />
 
           <div className="screen-only">
             {view === 'audit' ? (
@@ -382,7 +396,7 @@ export default function App() {
             )}
           </div>
 
-          <PrintReport name={source.name} vatPct={vatPct} total={sum.rows} pass={passCount} fail={sum.rowsWithFail} expert={sum.rowsNeedExpert}
+          <PrintReport filing={filing} taxMonth={taxMonth} name={source.name} vatPct={vatPct} total={sum.rows} pass={passCount} fail={sum.rowsWithFail} expert={sum.rowsNeedExpert}
             items={probs.map((p) => ({ ...p, no: invoices[p.invoice].row.invoice_no, lines: lineRange(invoices[p.invoice].lineNos) }))} />
         </>
       )}
@@ -461,8 +475,8 @@ function Help() {
   )
 }
 
-function PrintReport({ name, vatPct, total, pass, fail, expert, items }: {
-  name: string; vatPct: number; total: number; pass: number; fail: number; expert: number
+function PrintReport({ filing, taxMonth, name, vatPct, total, pass, fail, expert, items }: {
+  filing: FilingRow[]; taxMonth?: string; name: string; vatPct: number; total: number; pass: number; fail: number; expert: number
   items: { invoice: number; no: string; lines: string; clauseId: string; verdict: 'fail' | 'needs_expert' | 'warn'; evidence: string; fix: string }[]
 }) {
   const [checkedAt] = useState(() => new Date().toLocaleString('th-TH'))
@@ -470,6 +484,7 @@ function PrintReport({ name, vatPct, total, pass, fail, expert, items }: {
     <div className="print-only text-[11pt]">
       <h1 className="text-[16pt] font-bold">รายงานตรวจใบกำกับภาษีขาย</h1>
       <p>ไฟล์: {name} · ตรวจเมื่อ {checkedAt} · อัตรา VAT {vatPct}% · {PACKS[PACK].note}</p>
+      <div className="mt-3"><Filing rows={filing} taxMonth={taxMonth} print /></div>
       <p className="mt-2">ทั้งหมด {total} ใบ · ผ่านทุกข้อ {pass} ใบ · มีจุดต้องแก้ {fail} ใบ · ควรตรวจสอบเพิ่ม {expert} ใบ</p>
       {items.length > 0 && (
         <table className="mt-4 w-full border-collapse text-[9.5pt]">
@@ -485,5 +500,56 @@ function PrintReport({ name, vatPct, total, pass, fail, expert, items }: {
       )}
       <p className="mt-4 text-[9pt]">ผลตรวจเป็นการตรวจตัวเองเบื้องต้น ไม่ใช่คำแนะนำทางกฎหมายหรือภาษี สร้างโดย Rulecraft</p>
     </div>
+  )
+}
+
+const baht = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+/** F-01: what goes on each ภ.พ.30, one per seller premises and tax month, with due dates. */
+function Filing({ rows, taxMonth, print = false }: { rows: FilingRow[]; taxMonth?: string; print?: boolean }) {
+  if (rows.length === 0) return null
+  const due = taxMonth ? filingDeadlines(taxMonth) : null
+  const sellers = new Set(rows.map((r) => r.sellerTin)).size
+  return (
+    <section className={print ? 'grid gap-1' : 'screen-only grid gap-3 rounded-xl border border-line bg-raise p-4'}>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className={print ? 'text-[12pt] font-bold' : 'text-[1.0625rem] font-semibold'}>สรุปสำหรับยื่น ภ.พ.30</h2>
+        {taxMonth && due && (
+          <span className="text-[0.875rem]">
+            เดือนภาษี {thaiMonth(taxMonth)} · ยื่นแบบกระดาษภายใน <b>{thaiDate(due.paper)}</b>
+            {due.online ? <> · ยื่นออนไลน์ภายใน <b>{thaiDate(due.online)}</b></> : ' · ยังไม่ยืนยันว่ามีการขยายเวลายื่นออนไลน์สำหรับงวดนี้'}
+          </span>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[0.875rem]">
+          <thead>
+            <tr className="border-b border-line text-left">
+              {sellers > 1 && <th className="p-2 font-semibold">ผู้ขาย</th>}
+              <th className="p-2 font-semibold">สถานประกอบการ</th><th className="p-2 font-semibold">เดือนภาษี</th>
+              <th className="p-2 text-right font-semibold">ใบ</th><th className="p-2 text-right font-semibold">มูลค่า</th>
+              <th className="p-2 text-right font-semibold">ภาษีขาย</th><th className="p-2 text-right font-semibold">มีจุดต้องแก้</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, k) => {
+              const other = taxMonth && r.month && r.month !== taxMonth
+              return (
+                <tr key={k} className="border-b border-line last:border-0">
+                  {sellers > 1 && <td className="num p-2">{r.sellerTin || '(ไม่มีเลข)'}</td>}
+                  <td className="p-2">{branchLabel(r.branch)}</td>
+                  <td className={`p-2 whitespace-nowrap ${other ? 'text-expert' : ''}`}>{r.month ? thaiMonth(r.month) : '(อ่านวันที่ไม่ได้)'}{other ? ' · นอกเดือนที่ยื่น' : ''}</td>
+                  <td className="num p-2 text-right">{r.invoices}</td>
+                  <td className="num p-2 text-right">{baht(r.amount)}</td>
+                  <td className="num p-2 text-right">{baht(r.vat)}</td>
+                  <td className={`num p-2 text-right ${r.failing ? 'text-fail' : ''}`}>{r.failing}{r.unreadable ? ` · ${r.unreadable} ใบอ่านยอดไม่ได้` : ''}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[0.75rem] text-ink-3">ยอดจากไฟล์นี้เท่านั้น ยังไม่รวมใบเพิ่มหนี้ ใบลดหนี้ และยอดขายที่ออกใบกำกับภาษีอย่างย่อ ยื่นแยกรายสถานประกอบการ เว้นแต่ได้รับอนุมัติให้ยื่นรวม (ม.83 วรรคสี่) กำหนดยื่นออนไลน์ +8 วันตามประกาศกระทรวงการคลังที่ใช้กับแบบที่ครบกำหนดถึง 31 ม.ค. 2570</p>
+    </section>
   )
 }

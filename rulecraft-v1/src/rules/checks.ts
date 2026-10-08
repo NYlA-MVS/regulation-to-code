@@ -1,6 +1,7 @@
 // One pure check per clause. Each returns a verdict with evidence and a fix hint.
 import type { ClauseId } from './clauses'
 import { compact, digitsOnly, isBlank, norm, parseAmount } from './normalize'
+import { DG199_FROM, monthOf, RATE_KNOWN_UNTIL, rateFor, thaiDate, thaiMonth } from './rates'
 import { branchCode, isBranchNotation, isPlaceholder, parseDate, splitTaxId, taxIdProblem } from './validators'
 
 /** warn: likely a problem but depends on facts the file does not show. */
@@ -19,6 +20,10 @@ export interface Context {
   seen: Set<string>
   /** Line items of a multi-line invoice. Defaults to the row itself. */
   lines?: Row[]
+  /** "YYYY-MM": the tax month being filed. TI-14 compares invoice dates with it. */
+  taxMonth?: string
+  /** Defaults to now; tests pin it. */
+  today?: Date
 }
 
 const TITLE = compact('ใบกำกับภาษี')
@@ -107,12 +112,14 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     return pass(`วันที่ ${norm(row.issue_date)}`)
   },
   'TI-08': (row) => {
+    if (beforeDG199(row)) return beforeDG199Result
     const branch = isBlank(row.seller_branch) ? (splitTaxId(row.seller_tax_id).branch ?? '') : row.seller_branch
     return isBranchNotation(branch)
       ? pass(`ผู้ขาย: ${show(branch)}`)
       : fail(`สาขาผู้ขาย ${show(row.seller_branch)} ไม่ตรงรูปแบบ`, 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ขาย')
   },
   'TI-09': (row) => {
+    if (beforeDG199(row)) return beforeDG199Result
     const reg = registrant(row)
     if (reg === false) return { verdict: 'n/a', evidence: 'ผู้ซื้อไม่ได้จด VAT' }
     if (reg === null) {
@@ -126,6 +133,7 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     return p ? fail(`เลขผู้เสียภาษีผู้ซื้อ ${show(row.buyer_tax_id)}: ${p}`, 'ขอเลขผู้เสียภาษี 13 หลักจากผู้ซื้อ') : pass('เลขผู้เสียภาษีผู้ซื้อถูกรูปแบบ')
   },
   'TI-10': (row) => {
+    if (beforeDG199(row)) return beforeDG199Result
     const reg = registrant(row)
     const branch = isBlank(row.buyer_branch) ? (splitTaxId(row.buyer_tax_id).branch ?? '') : row.buyer_branch
     if (reg === false) return { verdict: 'n/a', evidence: 'ตรวจเฉพาะผู้ซื้อที่จด VAT' }
@@ -151,6 +159,34 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
       return warn(`ยอดรวม ${total.toFixed(2)} บาท แต่มูลค่า ${amt.toFixed(2)} + ภาษี ${vat.toFixed(2)} = ${want.toFixed(2)} บาท`, 'ตรวจมูลค่า ภาษี และยอดรวมอีกครั้ง ถ้ามีส่วนลด ต้องแสดงในใบและคำนวณภาษีหลังหักส่วนลด')
     return pass(`ยอดรวม ${total.toFixed(2)} = มูลค่า + ภาษี`)
   },
+  'TI-13': (row, ctx) => {
+    const d = parseDate(row.issue_date)
+    if (!d) return { verdict: 'n/a', evidence: 'ไม่ทราบวันที่ จึงหาอัตราตามกฎหมายไม่ได้' }
+    const law = rateFor(d)
+    if (!law)
+      return warn(`วันที่ ${thaiDate(d)} เลยวันที่ ${thaiDate(new Date(RATE_KNOWN_UNTIL))} ซึ่งเป็นวันสุดท้ายที่มีพระราชกฤษฎีกากำหนดอัตรา 7%`, 'ตรวจว่ามีพระราชกฤษฎีกาฉบับใหม่กำหนดอัตราเท่าใด ถ้าไม่ต่ออายุ อัตราจะกลับไปตามมาตรา 80')
+    if (Math.abs(law.rate - ctx.vatRate) > 1e-9)
+      return warn(`ตั้งอัตราตรวจไว้ ${(ctx.vatRate * 100).toFixed(1)}% แต่อัตราตามกฎหมาย ณ วันที่ ${thaiDate(d)} คือ ${(law.rate * 100).toFixed(0)}%`, `ใช้อัตรา ${(law.rate * 100).toFixed(0)}% ตาม${law.source} เว้นแต่เป็นรายการอัตรา 0% เช่นการส่งออก`)
+    return pass(`อัตรา ${(law.rate * 100).toFixed(0)}% ตาม${law.source}`)
+  },
+  'TI-14': (row, ctx) => {
+    const d = parseDate(row.issue_date)
+    if (!d) return { verdict: 'n/a', evidence: 'ไม่ทราบวันที่' }
+    const today = ctx.today ?? new Date()
+    if (d.toISOString().slice(0, 10) > today.toISOString().slice(0, 10))
+      return warn(`วันที่ ${thaiDate(d)} เป็นวันในอนาคต`, 'ใบกำกับภาษีต้องออกทันทีที่ความรับผิดเกิดขึ้น ตรวจว่าพิมพ์วันที่หรือปีผิดหรือไม่')
+    if (d.toISOString().slice(0, 10) < DG199_FROM)
+      return warn(`วันที่ ${thaiDate(d)} ก่อน 1 ม.ค. 2558`, 'ตรวจว่าปีถูกต้อง ใบที่ออกก่อนวันนี้ไม่ต้องมีสาขาและเลขผู้ซื้อตามประกาศฯ ฉบับที่ 199 จึงข้ามข้อ TI-08 ถึง TI-10')
+    if (ctx.taxMonth && monthOf(d) !== ctx.taxMonth)
+      return warn(`ใบลงวันที่ ${thaiDate(d)} อยู่นอกเดือนภาษี ${thaiMonth(ctx.taxMonth)} ที่กำลังจะยื่น`, `ภาษีขายของใบนี้ต้องอยู่ใน ภ.พ.30 เดือน ${thaiMonth(monthOf(d))} ถ้ายังไม่ได้รวมไว้ ให้ยื่นแบบเพิ่มเติมของเดือนนั้น`)
+    return pass(ctx.taxMonth ? `อยู่ในเดือนภาษี ${thaiMonth(ctx.taxMonth)}` : 'วันที่ไม่อยู่ในอนาคต')
+  },
+  'TI-24': (row) => {
+    if (!compact(row.doc_title).includes(ABBREVIATED) && !/\babb\b|abbreviated/i.test(norm(row.doc_title)))
+      return pass('ไม่ใช่ใบกำกับภาษีอย่างย่อ')
+    if (registrant(row) !== true) return { verdict: 'n/a', evidence: 'ใบอย่างย่อ แต่ผู้ซื้อไม่ได้ระบุว่าจด VAT' }
+    return warn('ออกใบกำกับภาษีอย่างย่อให้ผู้ซื้อที่จด VAT', 'ผู้ซื้อใช้ภาษีซื้อจากใบอย่างย่อไม่ได้ (ประกาศฯ ฉบับที่ 42 ข้อ 2(2)) ควรออกใบกำกับภาษีเต็มรูปให้แทน')
+  },
   'TI-15': (row, ctx) => {
     const lines = ctx.lines ?? [row]
     if (lines.length < 2) return pass('ใบนี้มีบรรทัดเดียว')
@@ -173,3 +209,9 @@ export function roundHalfUp(n: number): number {
 export function invoiceKey(row: Row): string {
   return [splitTaxId(row.seller_tax_id).tin, branchCode(row.seller_branch), norm(row.book_no), norm(row.invoice_no)].join('\u0001')
 }
+
+const beforeDG199 = (row: Row) => {
+  const d = parseDate(row.issue_date)
+  return d !== null && d.toISOString().slice(0, 10) < DG199_FROM
+}
+const beforeDG199Result: Result = { verdict: 'n/a', evidence: 'ใบออกก่อน 1 ม.ค. 2558 ประกาศอธิบดีฯ ฉบับที่ 199 ยังไม่บังคับ' }
