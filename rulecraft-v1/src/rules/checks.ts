@@ -24,6 +24,8 @@ export interface Context {
   taxMonth?: string
   /** Defaults to now; tests pin it. */
   today?: Date
+  /** Most common name/address per tax ID across the file (see buildPeers). */
+  peers?: Peers
 }
 
 const TITLE = compact('ใบกำกับภาษี')
@@ -114,9 +116,9 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
   'TI-08': (row) => {
     if (beforeDG199(row)) return beforeDG199Result
     const branch = isBlank(row.seller_branch) ? (splitTaxId(row.seller_tax_id).branch ?? '') : row.seller_branch
-    return isBranchNotation(branch)
-      ? pass(`ผู้ขาย: ${show(branch)}`)
-      : fail(`สาขาผู้ขาย ${show(row.seller_branch)} ไม่ตรงรูปแบบ`, 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ขาย')
+    if (isBranchNotation(branch)) return pass(`ผู้ขาย: ${show(branch)}`)
+    if (!isBlank(branch)) return warn(`สาขาผู้ขาย ${show(row.seller_branch)} เป็นชื่อสถานที่ ไม่ใช่ "สำนักงานใหญ่" หรือ "สาขาที่ ..."`, 'ระบุตามใบทะเบียน ภ.พ.20 เช่น "สาขาที่ 00001"')
+    return fail('ไม่มีสาขาผู้ขาย', 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ขาย')
   },
   'TI-09': (row) => {
     if (beforeDG199(row)) return beforeDG199Result
@@ -143,9 +145,9 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
         ? pass(`ผู้ซื้อ: ${show(branch)}`)
         : warn(`ผู้ซื้อมีเลขผู้เสียภาษีแต่สาขาผู้ซื้อ ${show(row.buyer_branch)} ไม่ตรงรูปแบบ (ไม่ได้ระบุว่าผู้ซื้อจด VAT)`, 'ถ้าผู้ซื้อจด VAT ต้องระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ซื้อ')
     }
-    return isBranchNotation(branch)
-      ? pass(`ผู้ซื้อ: ${show(branch)}`)
-      : fail(`สาขาผู้ซื้อ ${show(row.buyer_branch)} ไม่ตรงรูปแบบ`, 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ซื้อ')
+    if (isBranchNotation(branch)) return pass(`ผู้ซื้อ: ${show(branch)}`)
+    if (!isBlank(branch)) return warn(`สาขาผู้ซื้อ ${show(row.buyer_branch)} เป็นชื่อสถานที่ ไม่ใช่ "สำนักงานใหญ่" หรือ "สาขาที่ ..."`, 'ระบุตามใบทะเบียน ภ.พ.20 ของผู้ซื้อ เช่น "สาขาที่ 00001"')
+    return fail('ไม่มีสาขาผู้ซื้อ', 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ซื้อ')
   },
   'TI-11': (row, ctx) => {
     if (isBlank(row.total)) return { verdict: 'n/a', evidence: 'ไฟล์ไม่มียอดรวมทั้งสิ้น' }
@@ -158,6 +160,23 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     if (Math.abs(total - want) > 0.01 * (ctx.lines?.length ?? 1) + 1e-9)
       return warn(`ยอดรวม ${total.toFixed(2)} บาท แต่มูลค่า ${amt.toFixed(2)} + ภาษี ${vat.toFixed(2)} = ${want.toFixed(2)} บาท`, 'ตรวจมูลค่า ภาษี และยอดรวมอีกครั้ง ถ้ามีส่วนลด ต้องแสดงในใบและคำนวณภาษีหลังหักส่วนลด')
     return pass(`ยอดรวม ${total.toFixed(2)} = มูลค่า + ภาษี`)
+  },
+  'TI-12': (row, ctx) => {
+    const lines = ctx.lines ?? [row]
+    let checked = 0
+    for (const [k, line] of lines.entries()) {
+      const qty = parseAmount(line.qty)
+      const price = parseAmount(line.unit_price)
+      const amt = parseAmount(line.amount_ex_vat)
+      if (qty === null || price === null || amt === null) continue
+      checked++
+      const want = roundHalfUp(qty * price)
+      if (Math.abs(want - amt) > 0.01 + 1e-9) {
+        const at = lines.length > 1 ? `รายการที่ ${k + 1}: ` : ''
+        return { ...warn(`${at}${qty} × ${price.toFixed(2)} = ${want.toFixed(2)} บาท แต่มูลค่าเป็น ${amt.toFixed(2)} บาท`, 'ถ้ามีส่วนลด ต้องแสดงส่วนลดในใบกำกับภาษีให้ชัด แล้วคำนวณภาษีจากมูลค่าหลังหักส่วนลด'), line: k }
+      }
+    }
+    return checked ? pass('จำนวน × ราคาต่อหน่วย ตรงกับมูลค่า') : { verdict: 'n/a', evidence: 'ไม่มีราคาต่อหน่วยให้ตรวจ' }
   },
   'TI-13': (row, ctx) => {
     const d = parseDate(row.issue_date)
@@ -180,6 +199,36 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     if (ctx.taxMonth && monthOf(d) !== ctx.taxMonth)
       return warn(`ใบลงวันที่ ${thaiDate(d)} อยู่นอกเดือนภาษี ${thaiMonth(ctx.taxMonth)} ที่กำลังจะยื่น`, `ภาษีขายของใบนี้ต้องอยู่ใน ภ.พ.30 เดือน ${thaiMonth(monthOf(d))} ถ้ายังไม่ได้รวมไว้ ให้ยื่นแบบเพิ่มเติมของเดือนนั้น`)
     return pass(ctx.taxMonth ? `อยู่ในเดือนภาษี ${thaiMonth(ctx.taxMonth)}` : 'วันที่ไม่อยู่ในอนาคต')
+  },
+  'TI-16': (row, ctx) => {
+    if (!ctx.peers) return { verdict: 'n/a', evidence: 'ตรวจเทียบทั้งไฟล์เท่านั้น' }
+    const issues: string[] = []
+    for (const [field, label, key] of [
+      ['seller_name', 'ชื่อผู้ขาย', sellerKey(row)],
+      ['seller_address', 'ที่อยู่ผู้ขาย', sellerKey(row)],
+      ['buyer_name', 'ชื่อผู้ซื้อ', buyerKey(row)],
+    ] as const) {
+      if (!key || isBlank(row[field])) continue
+      const top = ctx.peers.get(`${field}\u0001${key}`)
+      if (top && top.count >= 2 && looseText(row[field]) !== top.key) issues.push(`${label} ${show(row[field])} ต่างจาก ${show(top.value)} ที่ใช้ใน ${top.count} ใบอื่นของเลขผู้เสียภาษีเดียวกัน`)
+    }
+    return issues.length
+      ? warn(issues.join(' · '), 'ใช้ชื่อและที่อยู่ตามที่จดทะเบียน VAT ให้ตรงกันทุกใบ ถ้าผู้ซื้อเปลี่ยนชื่อแล้ว ต้องใช้ชื่อใหม่ (ป.86/2542 ข้อ 11)')
+      : pass('ชื่อและที่อยู่ตรงกับใบอื่นของเลขผู้เสียภาษีเดียวกัน')
+  },
+  'TI-17': (row) => {
+    const bad = [['ผู้ขาย', row.seller_name], ['ผู้ซื้อ', row.buyer_name]].filter(([, n]) => /(^|\s)บ\.?จ\.?ก\.?(\s|$)/.test(norm(n)))
+    return bad.length
+      ? warn(`ชื่อ${bad.map(([who, n]) => `${who} ${show(n)}`).join(' และ ')} ใช้คำย่อ "บจก." ซึ่งไม่อยู่ในรายการคำย่อของ ป.86/2542`, 'ใช้ "บริษัท ... จำกัด", "บ. ... จก." หรือ "บจ." แทน (ยังไม่พบคำวินิจฉัยว่า "บจก." ใช้ไม่ได้ จึงเป็นเพียงคำเตือน)')
+      : pass('คำย่อนิติบุคคลอยู่ในรูปแบบที่รับรอง')
+  },
+  'TI-18': (row) => {
+    const n = norm(row.buyer_name).replace(/\s+/g, ' ')
+    const m = /^(นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.|mr\.?|mrs\.?|ms\.?|miss)\s*(.*)$/i.exec(n)
+    if (!m) return { verdict: 'n/a', evidence: 'ไม่ใช่ชื่อบุคคลธรรมดาที่มีคำนำหน้า' }
+    return m[2].split(' ').filter(Boolean).length >= 2
+      ? pass('มีชื่อและนามสกุลผู้ซื้อ')
+      : warn(`ชื่อผู้ซื้อ ${show(row.buyer_name)} ไม่มีนามสกุล`, 'ผู้ซื้อที่เป็นบุคคลธรรมดาต้องระบุทั้งชื่อและนามสกุล')
   },
   'TI-24': (row) => {
     if (!compact(row.doc_title).includes(ABBREVIATED) && !/\babb\b|abbreviated/i.test(norm(row.doc_title)))
@@ -215,3 +264,32 @@ const beforeDG199 = (row: Row) => {
   return d !== null && d.toISOString().slice(0, 10) < DG199_FROM
 }
 const beforeDG199Result: Result = { verdict: 'n/a', evidence: 'ใบออกก่อน 1 ม.ค. 2558 ประกาศอธิบดีฯ ฉบับที่ 199 ยังไม่บังคับ' }
+
+// ---- File-wide name/address consistency (TI-16) ----
+export type Peers = Map<string, { key: string; value: string; count: number }>
+const looseText = (v: string | undefined) => compact(v).toLowerCase()
+const sellerKey = (r: Row) => { const t = splitTaxId(r.seller_tax_id).tin; return t ? `${t}:${branchCode(r.seller_branch)}` : '' }
+const buyerKey = (r: Row) => { const t = splitTaxId(r.buyer_tax_id).tin; return t ? `${t}:${branchCode(r.buyer_branch)}` : '' }
+
+/** For each tax ID + branch, the most common spelling of each name/address field. */
+export function buildPeers(rows: Row[]): Peers {
+  const counts = new Map<string, Map<string, { value: string; count: number }>>()
+  for (const r of rows) {
+    for (const [field, key] of [['seller_name', sellerKey(r)], ['seller_address', sellerKey(r)], ['buyer_name', buyerKey(r)]] as const) {
+      if (!key || isBlank(r[field])) continue
+      const k = `${field}\u0001${key}`
+      const m = counts.get(k) ?? new Map()
+      const v = looseText(r[field])
+      m.set(v, { value: norm(r[field]), count: (m.get(v)?.count ?? 0) + 1 })
+      counts.set(k, m)
+    }
+  }
+  const out: Peers = new Map()
+  for (const [k, m] of counts) {
+    const [key, top] = [...m].sort((a, b) => b[1].count - a[1].count)[0]
+    // Only a clear majority is a reference; a 1-vs-1 split says nothing about which is right.
+    const second = [...m.values()].map((x) => x.count).sort((a, b) => b - a)[1] ?? 0
+    if (top.count > second) out.set(k, { key, ...top })
+  }
+  return out
+}

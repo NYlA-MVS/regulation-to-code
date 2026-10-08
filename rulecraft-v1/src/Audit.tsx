@@ -16,7 +16,7 @@ const isProblem = (r: RowResults) => Object.values(r).some((x) => x && PROBLEM.i
 
 /** Numbered marks for this invoice, in the order fields appear on the document. */
 function marksFor(res: RowResults): Mark[] {
-  const order = ['TI-01', 'TI-04', 'TI-15', 'TI-07', 'TI-02', 'TI-08', 'TI-03', 'TI-09', 'TI-10', 'TI-05', 'TI-06', 'TI-06b', 'TI-11']
+  const order = ['TI-01', 'TI-24', 'TI-04', 'TI-15', 'TI-07', 'TI-14', 'TI-02', 'TI-08', 'TI-03', 'TI-17', 'TI-18', 'TI-16', 'TI-09', 'TI-10', 'TI-05', 'TI-12', 'TI-06', 'TI-06b', 'TI-13', 'TI-11']
   const out: Mark[] = []
   for (const id of order) {
     const r = res[id as keyof RowResults]
@@ -32,6 +32,9 @@ const MARK_ON: Partial<Record<string, string[]>> = {
   'TI-09': ['buyer_tax_id'],
   'TI-10': ['buyer_branch'],
   'TI-11': ['total'],
+  'TI-13': ['vat_amount'],
+  'TI-24': ['doc_title'],
+  'TI-12': ['amount_ex_vat'],
 }
 
 /** A field on the paper. Circled in red pen when one of its clauses has a mark. */

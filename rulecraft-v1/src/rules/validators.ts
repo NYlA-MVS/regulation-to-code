@@ -68,7 +68,8 @@ const BRANCH_PATTERNS = [
   /^(HO|HQ)$/i,
   /^head\s*office$/i,
   /^สาขาที่\s*\d+$/,
-  /^(branch|br\.?)\s*no\.?\s*\d+$/i,
+  /^สาขา\s*\d+$/,
+  /^(branch|br\.?)\s*(no\.?)?\s*\d+$/i,
   /^\d{5}$/,
 ]
 
@@ -86,7 +87,7 @@ export function branchCode(value: string | undefined): string {
   return n && isBranchNotation(s) ? n[1].padStart(5, '0') : s
 }
 
-const PLACEHOLDERS = new Set(['-', '--', 'n/a', 'na', 'none', 'null', 'ลูกค้าทั่วไป', 'ไม่ระบุ', 'ไม่มี'])
+const PLACEHOLDERS = new Set(['-', '--', 'n/a', 'na', 'none', 'null', 'ลูกค้าทั่วไป', 'ไม่ระบุ', 'ไม่มี', 'เงินสด', 'ขายสด', 'ลูกค้าเงินสด', 'cash', 'walk-in', 'walk in', 'walkin'])
 export function isPlaceholder(value: string | undefined): boolean {
   return PLACEHOLDERS.has(norm(value).toLowerCase())
 }

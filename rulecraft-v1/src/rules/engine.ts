@@ -1,5 +1,5 @@
 // Runs a rule pack over rows, maps columns, compares with expected labels, and mutation-tests the checks.
-import { CHECKS, invoiceKey } from './checks'
+import { buildPeers, CHECKS, invoiceKey } from './checks'
 import type { Result, Row, Verdict } from './checks'
 import { CLAUSES, PACKS } from './clauses'
 import type { ClauseId, PackId } from './clauses'
@@ -74,9 +74,10 @@ export interface RunOptions {
 export function runPack(rows: Row[], pack: PackId, vatRate: number, lines?: Row[][], opts: RunOptions = {}): RowResults[] {
   const ids = PACKS[pack].clauses as readonly ClauseId[]
   const seen = new Set<string>()
+  const peers = buildPeers(rows)
   return rows.map((row, i) => {
     const res: RowResults = {}
-    for (const id of ids) res[id] = CHECKS[id](row, { vatRate, seen, lines: lines?.[i], ...opts })
+    for (const id of ids) res[id] = CHECKS[id](row, { vatRate, seen, lines: lines?.[i], peers, ...opts })
     if (norm(row.invoice_no)) seen.add(invoiceKey(row))
     return res
   })
@@ -116,7 +117,8 @@ export function compareExpected(results: RowResults[], expected: Record<string, 
 }
 
 // Mutation testing: break one key field of a passing row; the check must turn to fail.
-const MUTATORS: Record<ClauseId, (r: Row) => Row | { row: Row; lines: Row[] }> = {
+type Mutant = Row | { row: Row; lines?: Row[]; peers?: ReturnType<typeof buildPeers> }
+const MUTATORS: Record<ClauseId, (r: Row) => Mutant> = {
   'TI-01': (r) => ({ ...r, doc_title: 'ใบเสร็จรับเงิน' }),
   'TI-02': (r) => ({ ...r, seller_tax_id: r.seller_tax_id.slice(0, -1) + String((Number(r.seller_tax_id.slice(-1)) + 1) % 10) }),
   'TI-03': (r) => ({ ...r, buyer_address: '' }),
@@ -133,15 +135,24 @@ const MUTATORS: Record<ClauseId, (r: Row) => Row | { row: Row; lines: Row[] }> =
   'TI-14': (r) => ({ ...r, issue_date: '2099-01-01' }),
   'TI-15': (r) => ({ row: r, lines: [r, { ...r, issue_date: '1999-01-01' }] }),
   'TI-24': (r) => ({ ...r, doc_title: 'ใบกำกับภาษีอย่างย่อ', buyer_is_vat_registrant: 'Y' }),
+  'TI-12': (r) => ({ ...r, qty: String((parseFloat(r.qty) || 0) + 1) }),
+  'TI-16': (r) => ({ row: { ...r, seller_name: `${r.seller_name} สาขาใหม่` }, peers: buildPeers([r, r]) }),
+  'TI-17': (r) => ({ ...r, buyer_name: `บจก. ${r.buyer_name}` }),
+  'TI-18': (r) => ({ ...r, buyer_name: 'นายสมชาย' }),
 }
 
+const isWrapped = (m: Mutant): m is { row: Row; lines?: Row[]; peers?: ReturnType<typeof buildPeers> } => typeof m.row === 'object'
+
 export function mutationTest(rows: Row[], vatRate: number, opts: RunOptions = {}) {
+  const peers = buildPeers(rows)
   return CLAUSES.map((c) => {
-    const ctx = { vatRate, seen: new Set<string>(), ...opts }
+    const ctx = { vatRate, seen: new Set<string>(), peers, ...opts }
     const idx = rows.findIndex((r) => CHECKS[c.id](r, ctx).verdict === 'pass')
     if (idx < 0) return { clause: c, row: null as number | null, killed: false, after: null as Result | null }
     const m = MUTATORS[c.id](rows[idx])
-    const after = 'lines' in m && Array.isArray(m.lines) ? CHECKS[c.id](m.row as Row, { vatRate, seen: new Set(), lines: m.lines as Row[], ...opts }) : CHECKS[c.id](m as Row, { vatRate, seen: new Set(), ...opts })
+    const after = isWrapped(m)
+      ? CHECKS[c.id](m.row, { vatRate, seen: new Set(), lines: m.lines, peers: m.peers ?? peers, ...opts })
+      : CHECKS[c.id](m, { vatRate, seen: new Set(), peers, ...opts })
     return { clause: c, row: idx + 1, killed: after.verdict === 'fail' || after.verdict === 'warn', after }
   })
 }

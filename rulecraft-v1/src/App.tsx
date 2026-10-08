@@ -5,6 +5,7 @@ import { ACCEPT, detectHeaderRow, parseCsv, readFile, toTable } from './io/table
 import type { Sheet } from './io/table'
 import { download, downloadTemplate, fixListCsv, lineRange, problems } from './io/report'
 import { branchLabel, filingSummary, likelyTaxMonth } from './io/filing'
+import { numberGaps } from './io/sequence'
 import type { FilingRow } from './io/filing'
 import { filingDeadlines, thaiDate, thaiMonth } from './rules/rates'
 import checksSource from './rules/checks.ts?raw'
@@ -119,6 +120,7 @@ export default function App() {
   const taxMonth = taxMonthPick ?? likelyTaxMonth(invoices) ?? undefined
   const results = useMemo(() => runInvoices(invoices, PACK, vatRate, { taxMonth }), [invoices, vatRate, taxMonth])
   const filing = useMemo(() => filingSummary(invoices, results), [invoices, results])
+  const gaps = useMemo(() => numberGaps(invoices), [invoices])
   const sum = useMemo(() => summary(results), [results])
   const probs = useMemo(() => problems(results), [results])
   const activeClauses = CLAUSES.filter((c) => (PACKS[PACK].clauses as readonly string[]).includes(c.id))
@@ -304,6 +306,15 @@ export default function App() {
             </div>
             {unknownBuyerVat > 0 && (
               <p className="rounded-lg bg-expert-bg px-3 py-2 text-[0.875rem] text-expert">{unknownBuyerVat} ใบไม่มีทั้งข้อมูลว่าผู้ซื้อจด VAT และเลขผู้เสียภาษีผู้ซื้อ จึงยังไม่ได้ตรวจ TI-09 และ TI-10 ถ้าผู้ซื้อรายใดจด VAT ใบนั้นต้องมีเลขผู้เสียภาษีและสาขาของผู้ซื้อ (ประกาศอธิบดีฯ ฉบับที่ 199) แนะนำให้เพิ่มคอลัมน์ “ผู้ซื้อจด VAT” ในไฟล์</p>
+            )}
+            {gaps.length > 0 && (
+              <details className="rounded-lg border border-line bg-raise px-3 py-2 text-[0.875rem]">
+                <summary className="cursor-pointer">เลขที่ใบกำกับภาษีข้ามไป {gaps.reduce((n, g) => n + g.missing.length + g.more, 0)} เลข (ข้อมูลเท่านั้น ไม่ใช่ความผิด)</summary>
+                <ul className="mt-2 grid gap-1 text-ink-2">
+                  {gaps.map((g) => (<li key={g.series}><span className="num">{g.series}</span>: {g.missing.join(', ')}{g.more ? ` และอีก ${g.more} เลข` : ''}</li>))}
+                </ul>
+                <p className="mt-2 text-[0.8125rem] text-ink-3">กฎหมายไม่ได้บังคับให้เลขที่ต่อเนื่อง และใช้หลายชุดพร้อมกันได้ ควรตรวจว่าเลขที่หายไปเป็นใบที่ยกเลิก หรือเป็นใบที่ไม่ได้อยู่ในไฟล์นี้</p>
+              </details>
             )}
             {sum.rows > 0 && (
               <div className="flex flex-wrap gap-2">
