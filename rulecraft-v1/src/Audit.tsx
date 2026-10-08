@@ -7,6 +7,10 @@ import { CLAUSES } from './rules/clauses'
 import type { Clause } from './rules/clauses'
 import type { Invoice, RowResults } from './rules/engine'
 import { docType, isCancelled } from './rules/checks'
+import { Badge, StatusIcon } from './ui'
+import { LEVEL } from './levels'
+import type { Level } from './levels'
+import { ISSUE_TITLE } from './io/issues'
 import { lineRange } from './io/report'
 import { norm, parseAmount } from './rules/normalize'
 
@@ -49,9 +53,9 @@ function Field({ field, marks, line, children, className = '' }: { field: string
       {hit.length > 0 && (
         <>
           <span className={`pen pointer-events-none absolute -inset-x-2.5 -inset-y-1.5 rounded-[50%] border-[1.6px] ${expertOnly ? 'border-dashed border-[var(--expert-pen)]' : 'border-[var(--redpen)]'}`} aria-hidden="true" />
-          <span className="absolute -top-3 -right-4 flex gap-0.5">
+          <span className="ml-1 inline-flex gap-0.5 align-super sm:absolute sm:-top-4 sm:-right-6 sm:ml-0">
             {hit.map((m) => (
-              <a key={m.n} href={`#note-${m.n}`} className={`grid size-5 place-items-center rounded-full font-sans text-[0.6875rem] font-bold text-white no-underline ${m.verdict === 'fail' ? 'bg-[var(--redpen)]' : 'bg-[var(--expert-pen)]'}`} aria-label={`ดูหมายเหตุข้อ ${m.n}`}>
+              <a key={m.n} href={`#note-${m.n}`} className={`grid size-6 place-items-center rounded-full font-sans text-[0.75rem] font-bold text-white no-underline ${m.verdict === 'fail' ? 'bg-[var(--redpen)]' : 'bg-[var(--expert-pen)]'}`} aria-label={`ดูหมายเหตุข้อ ${m.n}`}>
                 {m.n}
               </a>
             ))}
@@ -110,44 +114,35 @@ export function Audit({
       </div>
     )
 
-  const failCount = problemRows.length
   return (
     <div className="grid grid-cols-1 gap-4">
-      <p className="text-[1.0625rem]">
-        <span className="num font-semibold text-[var(--redpen-text)]">{failCount}</span> จาก <span className="num font-semibold">{rows.length}</span> ใบ มีจุดที่ต้องแก้หรือต้องถามผู้เชี่ยวชาญ
-      </p>
-
-      {/* invoice strip: every invoice, status at a glance */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <nav aria-label="เลือกใบกำกับภาษี" className="flex max-w-full gap-1 overflow-x-auto pb-1">
-          {results.map((r, k) => {
-            const bad = Object.values(r).some((x) => x?.verdict === 'fail')
-            const ask = !bad && Object.values(r).some((x) => x?.verdict === 'needs_expert' || x?.verdict === 'warn')
-            return (
-              <button key={k} type="button" onClick={() => setIndex(k)} aria-current={k === i ? 'true' : undefined}
-                aria-label={`ใบที่ ${k + 1}${bad ? ' มีข้อไม่ผ่าน' : ask ? ' ควรตรวจสอบ' : ' ผ่าน'}`}
-                className={`num relative grid h-8 min-w-8 shrink-0 place-items-center rounded-md border text-[0.75rem] ${k === i ? 'border-action bg-action text-on-action' : 'border-line bg-surface hover:border-ink'}`}>
-                {k + 1}
-                {(bad || ask) && <span className={`absolute -top-1 -right-1 size-2 rounded-full ${bad ? 'bg-[var(--redpen)]' : 'bg-[var(--expert-pen)]'}`} />}
-              </button>
-            )
-          })}
-        </nav>
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1">
-          <button type="button" disabled={i === 0} onClick={() => setIndex(i - 1)} className="h-9 rounded-md border border-line bg-surface px-3 text-[0.875rem] disabled:opacity-40">← ก่อนหน้า</button>
-          <span className="num px-2 text-[0.875rem] text-muted">ใบที่ {i + 1} / {rows.length}</span>
-          <button type="button" disabled={i >= rows.length - 1} onClick={() => setIndex(i + 1)} className="h-9 rounded-md border border-line bg-surface px-3 text-[0.875rem] disabled:opacity-40">ถัดไป →</button>
+          <button type="button" disabled={i === 0} onClick={() => setIndex(i - 1)} className="btn btn-secondary px-3" aria-label="ใบก่อนหน้า">←</button>
+          <span className="num min-w-[6.5rem] px-2 text-center text-[0.9375rem] text-ink-2">ใบที่ {i + 1} จาก {rows.length}</span>
+          <button type="button" disabled={i >= rows.length - 1} onClick={() => setIndex(i + 1)} className="btn btn-secondary px-3" aria-label="ใบถัดไป">→</button>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {nextProblem !== undefined && nextProblem !== i && (
-            <button type="button" onClick={() => setIndex(nextProblem)} className="h-9 rounded-md bg-action px-3 text-[0.875rem] font-medium text-on-action">ไปใบถัดไปที่มีปัญหา</button>
+            <button type="button" onClick={() => setIndex(nextProblem)} className="btn btn-primary">ใบถัดไปที่มีปัญหา</button>
           )}
-          <button type="button" onClick={onMatrix} className="h-9 rounded-md border border-line bg-surface px-3 text-[0.875rem]">ดูภาพรวมทุกใบ</button>
+          <button type="button" onClick={onMatrix} className="btn btn-secondary">กลับไปรายการใบ</button>
         </div>
       </div>
+
+      <nav aria-label="เลือกใบกำกับภาษี" className="flex max-w-full gap-1 overflow-x-auto pb-1">
+        {results.map((r, k) => {
+          const lv = levelOf(r)
+          return (
+            <button key={k} type="button" onClick={() => setIndex(k)} aria-current={k === i ? 'true' : undefined}
+              aria-label={`ใบที่ ${k + 1} ${LEVEL[lv].label}`} title={`ใบที่ ${k + 1} · ${LEVEL[lv].label}`}
+              className={`num flex h-10 min-w-12 shrink-0 items-center justify-center gap-1 rounded-lg border px-2 text-[0.875rem] ${k === i ? 'border-action bg-action text-on-action' : 'border-line bg-surface hover:bg-sunken'}`}>
+              {lv !== 'pass' && lv !== 'n/a' && <StatusIcon level={lv} size={14} className={k === i ? '' : LEVEL[lv].text} />}
+              {k + 1}
+            </button>
+          )
+        })}
+      </nav>
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_21rem]">
         {/* the paper */}
@@ -261,7 +256,7 @@ export function Audit({
         {/* the margin */}
         <aside aria-label="หมายเหตุจากการตรวจ" className="grid content-start gap-3 lg:sticky lg:top-4" aria-live="polite">
           {marks.length === 0 ? (
-            <div className="grid gap-1 rounded-lg border border-line bg-surface p-4">
+            <div className="grid gap-1 rounded-xl border border-line bg-surface p-4">
               {isCancelled(row) ? (
                 <>
                   <span className="font-semibold">ใบนี้ถูกยกเลิก</span>
@@ -269,31 +264,36 @@ export function Audit({
                 </>
               ) : (
                 <>
-                  <span className="font-semibold text-pass">ใบนี้ผ่านทุกข้อในชุดกฎนี้</span>
+                  <span className="flex items-center gap-2 font-semibold text-pass"><StatusIcon level="pass" />ใบนี้ผ่านทุกข้อตรวจ</span>
                   <span className="text-[0.875rem] text-muted">ไม่มีจุดที่ต้องแก้ ข้อที่ไม่เกี่ยวกับใบนี้ (เช่น ผู้ซื้อไม่ได้จด VAT) ถูกข้ามไป</span>
                 </>
               )}
             </div>
           ) : (
             marks.map((m) => (
-              <section id={`note-${m.n}`} key={m.n} className={`note grid gap-2 rounded-lg border bg-surface p-4 ${m.verdict === 'fail' ? 'border-[var(--redpen-line)]' : 'border-[var(--expert-line)]'}`}>
-                <header className="flex items-baseline gap-2">
+              <section id={`note-${m.n}`} key={m.n} className={`note grid gap-2 rounded-xl border-l-[5px] border bg-surface p-4 ${LEVEL[m.verdict as Level].border} ${m.verdict === 'fail' ? 'border-l-fail' : m.verdict === 'warn' ? 'border-l-warn' : 'border-l-expert'}`}>
+                <header className="flex flex-wrap items-center gap-2">
                   <span className={`grid size-6 shrink-0 place-items-center rounded-full text-[0.75rem] font-bold text-white ${m.verdict === 'fail' ? 'bg-[var(--redpen)]' : 'bg-[var(--expert-pen)]'}`}>{m.n}</span>
-                  <span className={`font-semibold ${m.verdict === 'fail' ? 'text-[var(--redpen-text)]' : 'text-expert'}`}>{m.verdict === 'fail' ? 'ต้องแก้' : m.verdict === 'warn' ? 'ควรตรวจสอบ' : 'ถามผู้เชี่ยวชาญ'}</span>
-                  <span className="num text-[0.8125rem] text-muted">{m.clause.id}</span>
+                  <Badge level={m.verdict as Level} compact />
                 </header>
-                <p className="text-[0.9375rem]">{m.evidence}</p>
-                {m.fix && <p className="text-[0.875rem] text-muted"><span className="font-semibold text-ink">วิธีแก้</span> {m.fix}</p>}
-                <details className="text-[0.8125rem]">
-                  <summary className="cursor-pointer text-muted">{m.clause.source}</summary>
-                  <blockquote className="mt-1 border-l-2 border-line pl-3">“{m.clause.quote}”</blockquote>
+                <p className="font-semibold">{ISSUE_TITLE[m.clause.id]}</p>
+                <p className="text-[0.9375rem] text-ink-2">{m.evidence}</p>
+                {m.fix && <p className="rounded-lg bg-sunken px-3 py-2 text-[0.9375rem]"><span className="font-semibold">วิธีแก้ </span>{m.fix}</p>}
+                <details className="text-[0.875rem]">
+                  <summary className="cursor-pointer text-action">ทำไม · {m.clause.source}</summary>
+                  <blockquote className="mt-1 border-l-[3px] border-line-strong pl-3 font-[family-name:var(--font-doc)] text-[1rem]">“{m.clause.quote}”</blockquote>
                 </details>
               </section>
             ))
           )}
-          <p className="text-[0.75rem] text-muted">ใช้ปุ่มลูกศร ← → บนคีย์บอร์ดเพื่อเปลี่ยนใบได้</p>
+          <p className="text-[0.875rem] text-ink-3">กดลูกศร ← → บนคีย์บอร์ดเพื่อเปลี่ยนใบ</p>
         </aside>
       </div>
     </div>
   )
+}
+
+const levelOf = (r: RowResults): Level => {
+  const vs = Object.values(r).map((x) => x?.verdict)
+  return vs.includes('fail') ? 'fail' : vs.includes('warn') ? 'warn' : vs.includes('needs_expert') ? 'needs_expert' : 'pass'
 }

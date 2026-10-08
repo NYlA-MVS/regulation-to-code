@@ -8,127 +8,155 @@ const OUT = process.env.OUT ?? 'e2e/out'
 mkdirSync(OUT, { recursive: true })
 const browser = await chromium.launch({ executablePath: process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
 const fails = []
-const seen = async (loc) => loc.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false)
 const ok = (cond, msg) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${msg}`); if (!cond) fails.push(msg) }
+const seen = async (loc) => loc.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false)
+const csvFile = (name, lines) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n')) })
+const HEAD = 'เลขที่ใบกำกับ,วันที่,ชื่อเอกสาร,ชื่อผู้ขาย,ที่อยู่ผู้ขาย,เลขผู้เสียภาษีผู้ขาย,สาขาผู้ขาย,ชื่อลูกค้า,ที่อยู่ลูกค้า,เลขผู้เสียภาษีลูกค้า,สาขาลูกค้า'
 
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, acceptDownloads: true })
+const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, permissions: ['clipboard-read', 'clipboard-write'] })
+const page = await ctx.newPage()
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message))
+const upload = async (file) => { await page.goto(URL); await page.locator('#file').setInputFiles(file) }
+
 await page.goto(URL)
+ok(await seen(page.getByRole('heading', { name: 'ตรวจใบกำกับภาษีขาย ก่อนยื่น ภ.พ.30' })), 'upload: page heading')
+ok(await seen(page.getByText('ตรวจในเบราว์เซอร์นี้เท่านั้น ไม่มีการส่งไฟล์ออก')), 'upload: privacy promise next to the button')
 await page.screenshot({ path: `${OUT}/1-upload.png`, fullPage: true })
 
-// Sample flow
+// Sample: every column matches, so the mapping step is skipped
 await page.getByRole('button', { name: 'ลองด้วยไฟล์ตัวอย่าง' }).click()
-ok(await page.getByText('12 แถว · 8 ใบ').isVisible(), 'sample: 12 rows grouped into 8 invoices')
-ok((await page.locator('#header-row').inputValue()) === '4', 'sample: header row detected at row 4')
-await page.screenshot({ path: `${OUT}/2-map.png`, fullPage: true })
-await page.getByRole('button', { name: 'ตรวจ 8 ใบ' }).click()
-const stats = await page.locator('.num.text-\\[1\\.75rem\\]').allInnerTexts()
-ok(JSON.stringify(stats) === JSON.stringify(['8', '3', '5', '0']), `results stats ${stats}`)
-await page.screenshot({ path: `${OUT}/3-results.png`, fullPage: true })
-ok(await seen(page.locator('section.screen-only').getByText('สรุปสำหรับยื่น ภ.พ.30')), 'F-01: filing summary shown')
-ok(await seen(page.locator('section.screen-only').getByText(/เดือนภาษี ก\.ย\. 2569 · ยื่นแบบกระดาษภายใน/)), 'F-01: tax month auto-detected as ก.ย. 2569')
-ok(await seen(page.locator('section.screen-only b', { hasText: '23 ต.ค. 2569' })), 'F-01: online deadline 23 ต.ค. 2569')
-await page.getByRole('button', { name: 'ใบที่ 4 มีข้อไม่ผ่าน' }).click()
-ok(await page.getByText(/รายการที่ 2: จำนวน/).first().isVisible(), 'audit: multi-line invoice names failing line')
-await page.screenshot({ path: `${OUT}/4-audit-multiline.png`, fullPage: true })
+ok(await seen(page.getByRole('heading', { name: 'ต้องแก้ 5 เรื่อง ใน 5 ใบ ก่อนยื่น ภ.พ.30' })), 'results: verdict first, mapping skipped')
+ok(await seen(page.getByText(/หัวคอลัมน์แถวที่ 4 · จับคู่คอลัมน์อัตโนมัติ/)), 'results: says header row and auto-mapping')
+ok((await page.locator('article.issue').count()) === 5, 'issues: one card per rule (5)')
+await page.getByRole('button', { name: 'เริ่มแก้เรื่องแรก' }).click()
+await page.waitForTimeout(100)
+ok(await page.evaluate(() => document.activeElement?.classList.contains('issue')), 'issues: "start with the first" focuses the first card')
+ok(await seen(page.locator('article.issue').filter({ hasText: 'รายการสินค้า จำนวน หรือมูลค่าไม่ครบ' }).getByText(/รายการที่ 2: จำนวน "0"/)), 'issues: multi-line invoice names the failing line')
+await page.screenshot({ path: `${OUT}/2-results.png`, fullPage: true })
 
-const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /ดาวน์โหลดรายการที่ต้องแก้/ }).click()])
+const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'ดาวน์โหลดรายการที่ต้องแก้' }).click()])
 const csv = readFileSync(await dl.path(), 'utf8')
 ok(dl.suggestedFilename().endsWith('.csv') && csv.includes('SP6909-006') && csv.charCodeAt(0) === 0xfeff, `fix list downloaded: ${dl.suggestedFilename()}`)
+const [dl2] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /ไฟล์เดิมพร้อมผลตรวจ/ }).click()])
+const wb = XLSX.read(readFileSync(await dl2.path()))
+const sheet = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+ok(sheet.length === 12 && sheet[0]['ผลตรวจ'] === 'ผ่าน' && sheet.find((r) => r['เลขที่ใบกำกับ'] === 'SP6909-007')?.['ผลตรวจ'] === 'ต้องแก้', `annotated xlsx: 12 original rows with status (${dl2.suggestedFilename()})`)
 
-await page.getByRole('button', { name: 'ดูภาพรวมทุกใบ' }).click()
-ok((await page.locator('table:has(th:text("ใบที่ / เลขที่")) tbody tr').count()) === 5, 'matrix: shows only the 5 problem invoices by default')
-await page.screenshot({ path: `${OUT}/5-matrix.png`, fullPage: true })
+// Invoice list with filters
+await page.getByRole('tab', { name: /รายการใบ/ }).click()
+await page.getByRole('radio', { name: /ต้องแก้/ }).click()
+ok((await page.locator('table:has(caption) tbody tr').count()) === 5, 'list: "must fix" filter shows 5 invoices')
+await page.screenshot({ path: `${OUT}/3-list.png`, fullPage: true })
+await page.getByRole('button', { name: 'ดูใบ SP6909-004' }).click()
+ok(await seen(page.getByRole('article', { name: /SP6909-004/ })), 'invoice: opens on paper')
+ok(await seen(page.locator('aside').getByText('รายการสินค้า จำนวน หรือมูลค่าไม่ครบ')), 'invoice: margin note in plain words')
+await page.screenshot({ path: `${OUT}/4-invoice.png`, fullPage: true })
+
+// ภ.พ.30 summary
+await page.getByRole('tab', { name: /สรุป ภ.พ.30/ }).click()
+const filing = page.locator('section[aria-labelledby="filing-title"]')
+ok(await seen(filing.getByText('15 ต.ค. 2569')) && await seen(filing.getByText('23 ต.ค. 2569')), 'filing: paper 15 / online 23 ต.ค. 2569')
+ok(await seen(filing.getByText('7,280.00').first()), 'filing: output VAT for the month')
+await page.screenshot({ path: `${OUT}/5-filing.png`, fullPage: true })
 
 // Print shows only the report
 await page.emulateMedia({ media: 'print' })
 ok(await page.locator('.print-only').isVisible(), 'print: report visible')
 ok(!(await page.locator('header.screen-only').isVisible()), 'print: app chrome hidden')
-await page.pdf({ path: `${OUT}/7-report.pdf`, format: 'A4' })
+await page.pdf({ path: `${OUT}/6-report.pdf`, format: 'A4' })
 await page.emulateMedia({ media: 'screen' })
 
-
-// Excel upload with a title row and a tax ID that lost its leading zero
-const ws = XLSX.utils.aoa_to_sheet([
-  ['รายงานภาษีขาย'],
-  ['เลขที่ใบกำกับ', 'วันที่', 'ชื่อเอกสาร', 'ชื่อผู้ขาย', 'ที่อยู่ผู้ขาย', 'เลขผู้เสียภาษีผู้ขาย', 'สาขาผู้ขาย', 'ชื่อลูกค้า', 'ที่อยู่ลูกค้า', 'เลขผู้เสียภาษีลูกค้า', 'สาขาลูกค้า', 'ลูกค้าจด VAT', 'รายการ', 'จำนวน', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'ภาษีมูลค่าเพิ่ม', 'รวมทั้งสิ้น'],
-  ['X-1', new Date(2026, 10, 3), 'ใบกำกับภาษี', 'บริษัท ก จำกัด', '1 ถ.หนึ่ง', 105558123451, 'สำนักงานใหญ่', 'บริษัท ข จำกัด', '2 ถ.สอง', '0105547003211', 'สำนักงานใหญ่', 'Y', 'น็อต', 10, 10, 100, 7, 107],
-], { cellDates: true })
-const wb = XLSX.utils.book_new()
-XLSX.utils.book_append_sheet(wb, ws, 'ภาษีขาย')
-const xlsx = Buffer.from(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }))
-await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
-await page.locator('#file').setInputFiles({ name: 'sales.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: xlsx })
-ok(await seen(page.getByText('sales.xlsx · 1 แถว · 1 ใบ')), 'xlsx: read with title row skipped')
-await page.getByRole('button', { name: 'ตรวจ 1 ใบ' }).click()
-ok(await seen(page.getByText(/Excel ตัดเลข 0/).first()), 'xlsx: leading-zero tax ID explained')
-
-// Non-spreadsheet rejected
-await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
-await page.locator('#file').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
-ok(await seen(page.getByRole('alert').getByText('รองรับไฟล์ .xlsx .xls และ .csv เท่านั้น')), 'txt: rejected with message')
-
-// No buyer-VAT column: file-level notice, and a buyer TIN without branch is a warning
-const noVat = [
-  'เลขที่ใบกำกับ,วันที่,ชื่อเอกสาร,ชื่อผู้ขาย,ที่อยู่ผู้ขาย,เลขผู้เสียภาษีผู้ขาย,สาขาผู้ขาย,ชื่อลูกค้า,ที่อยู่ลูกค้า,เลขผู้เสียภาษีลูกค้า,สาขาลูกค้า,รายการ,จำนวน,มูลค่าก่อน VAT,ภาษีมูลค่าเพิ่ม,รวมทั้งสิ้น',
-  'N-1,1 ต.ค. 2569,TAX INVOICE,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,นายสมชาย ใจดี,2 ถ.สอง,,,น็อต,10,100.00,7.00,107.00',
-  'N-2,2 ต.ค. 2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,3 ถ.สาม,0105547003211,,สกรู,5,50.00,3.50,53.50',
-].join('\n')
-await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
-await page.locator('#file').setInputFiles({ name: 'novat.csv', mimeType: 'text/csv', buffer: Buffer.from(noVat) })
-await page.getByRole('button', { name: 'ตรวจ 2 ใบ' }).click()
-ok(await seen(page.getByText(/1 ใบไม่มีทั้งข้อมูลว่าผู้ซื้อจด VAT/)), 'no VAT column: file-level notice shown')
-const st = await page.locator('.num.text-\\[1\\.75rem\\]').allInnerTexts()
-ok(JSON.stringify(st) === JSON.stringify(['2', '1', '0', '1']), `no VAT column: English title + Thai-month dates pass, missing branch warns (${st})`)
-await page.getByRole('button', { name: /ใบที่ 2 ควรตรวจสอบ/ }).click()
-ok(await seen(page.getByText('ควรตรวจสอบ', { exact: true }).first()), 'audit: warn note shown')
-await page.screenshot({ path: `${OUT}/8-warn.png`, fullPage: true })
-await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
-
-// P3: credit note, cancelled invoice and its replacement, through the optional columns
-const p3 = [
-  'เลขที่ใบกำกับ,วันที่,ชื่อเอกสาร,ชื่อผู้ขาย,ที่อยู่ผู้ขาย,เลขผู้เสียภาษีผู้ขาย,สาขาผู้ขาย,ชื่อลูกค้า,ที่อยู่ลูกค้า,เลขผู้เสียภาษีลูกค้า,สาขาลูกค้า,ลูกค้าจด VAT,รายการ,จำนวน,มูลค่าก่อน VAT,ภาษีมูลค่าเพิ่ม,รวมทั้งสิ้น,สถานะ,ออกแทนใบเลขที่,อ้างอิงใบกำกับเดิม,มูลค่าเดิม,มูลค่าที่ถูกต้อง,เหตุผล',
-  'P-1,03/09/2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,น็อต,10,1000.00,70.00,1070.00,ยกเลิก,,,,,',
-  'P-2,03/09/2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,น็อต,10,1000.00,70.00,1070.00,,P-1,,,,',
-  'CN-1,10/09/2569,ใบลดหนี้,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,,,200.00,14.00,214.00,,,P-2,1000.00,800.00,คืนสินค้า 2 ชิ้น',
-].join('\n')
-await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
-await page.locator('#file').setInputFiles({ name: 'p3.csv', mimeType: 'text/csv', buffer: Buffer.from(p3) })
-ok((await page.locator('#map-ref_invoice_no').inputValue()) === 'อ้างอิงใบกำกับเดิม', 'P3: optional columns auto-mapped')
-await page.getByRole('button', { name: 'ตรวจ 3 ใบ' }).click()
-const p3stats = await page.locator('.num.text-\\[1\\.75rem\\]').allInnerTexts()
-ok(JSON.stringify(p3stats) === JSON.stringify(['3', '3', '0', '0']), `P3: cancelled, replacement and credit note all pass (${p3stats})`)
-ok(await seen(page.locator('section.screen-only').getByText('800.00')), 'P3: filing nets the credit note (1,000 − 200 = 800)')
-ok(await seen(page.locator('section.screen-only').getByText(/ยกเลิก 1 ไม่นับยอด/)), 'P3: cancelled listed, not summed')
-await page.getByRole('button', { name: 'ใบที่ 1 ผ่าน' }).click()
-ok(await seen(page.locator('article').getByText('ยกเลิก', { exact: true })), 'P3: cancelled stamp on the paper')
-await page.getByText('ตรวจด้วยตาก่อนส่งใบ').click()
-await page.getByLabel(/ตีพิมพ์ไว้ หรือพิมพ์จากคอมพิวเตอร์ทั้งฉบับ ไม่ใช่/).check()
-ok(await seen(page.getByText('1/9')), 'P3: manual checklist counts ticks')
-await page.screenshot({ path: `${OUT}/9-p3.png`, fullPage: true })
-await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
-
-// Mapping remembered for the same header layout
-await page.getByRole('button', { name: 'ลองด้วยไฟล์ตัวอย่าง' }).click()
+// Mapping can still be reviewed; a change is remembered for the same header layout
+await page.getByRole('button', { name: 'ตรวจการจับคู่คอลัมน์' }).click()
+ok((await page.locator('#header-row').inputValue()) === '4', 'mapping: header row 4')
+ok((await page.locator('#tax-month').inputValue()) === '2026-09', 'mapping: tax month auto-detected')
+ok(await seen(page.getByText('ตรงกับชื่อคอลัมน์').first()), 'mapping: match status in words')
+await page.screenshot({ path: `${OUT}/7-mapping.png`, fullPage: true })
 await page.locator('#map-total').selectOption('')
 await page.getByRole('button', { name: 'ตรวจ 8 ใบ' }).click()
 await page.reload()
 await page.getByRole('button', { name: 'ลองด้วยไฟล์ตัวอย่าง' }).click()
-await page.locator('#map-total').waitFor()
-ok((await page.locator('#map-total').inputValue()) === '', `mapping: remembered after reload (${await page.locator('#map-total').inputValue()})`)
+await page.getByRole('button', { name: 'ตรวจการจับคู่คอลัมน์' }).click()
+ok((await page.locator('#map-total').inputValue()) === '', 'mapping: remembered after reload')
+ok(await seen(page.getByText('จำได้จากครั้งก่อน').first()), 'mapping: remembered status shown')
+
+// Excel with a title row and a tax ID that lost its leading zero
+const ws = XLSX.utils.aoa_to_sheet([
+  ['รายงานภาษีขาย'],
+  ['เลขที่ใบกำกับ', 'วันที่', 'ชื่อเอกสาร', 'ชื่อผู้ขาย', 'ที่อยู่ผู้ขาย', 'เลขผู้เสียภาษีผู้ขาย', 'สาขาผู้ขาย', 'ชื่อลูกค้า', 'ที่อยู่ลูกค้า', 'เลขผู้เสียภาษีลูกค้า', 'สาขาลูกค้า', 'ลูกค้าจด VAT', 'รายการ', 'จำนวน', 'ราคาต่อหน่วย', 'มูลค่าก่อน VAT', 'ภาษีมูลค่าเพิ่ม', 'รวมทั้งสิ้น'],
+  ['X-1', new Date(2026, 8, 3), 'ใบกำกับภาษี', 'บริษัท ก จำกัด', '1 ถ.หนึ่ง', 105558123451, 'สำนักงานใหญ่', 'บริษัท ข จำกัด', '2 ถ.สอง', '0105547003211', 'สำนักงานใหญ่', 'Y', 'น็อต', 10, 10, 100, 7, 107],
+], { cellDates: true })
+const book = XLSX.utils.book_new()
+XLSX.utils.book_append_sheet(book, ws, 'ภาษีขาย')
+await upload({ name: 'sales.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from(XLSX.write(book, { type: 'array', bookType: 'xlsx' })) })
+ok(await seen(page.getByRole('heading', { name: /ต้องแก้ 1 เรื่อง ใน 1 ใบ/ })), 'xlsx: read with title row skipped')
+ok(await seen(page.getByText(/Excel ตัดเลข 0/).first()), 'xlsx: leading-zero tax ID explained')
+
+// Non-spreadsheet rejected
+await upload({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
+ok(await seen(page.getByRole('alert').getByText('รองรับไฟล์ .xlsx .xls และ .csv เท่านั้น')), 'txt: rejected with message')
+
+// No buyer-VAT column: mapping step shown, then a file-level note and a warning
+await upload(csvFile('novat.csv', [
+  `${HEAD},รายการ,จำนวน,มูลค่าก่อน VAT,ภาษีมูลค่าเพิ่ม,รวมทั้งสิ้น`,
+  'N-1,1 ต.ค. 2569,TAX INVOICE,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,นายสมชาย ใจดี,2 ถ.สอง,,,น็อต,10,100.00,7.00,107.00',
+  'N-2,2 ต.ค. 2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,3 ถ.สาม,0105547003211,,สกรู,5,50.00,3.50,53.50',
+]))
+ok(await seen(page.getByRole('heading', { name: 'ตรวจการจับคู่คอลัมน์' })), 'mapping step shown when a recommended column is missing')
+await page.getByRole('button', { name: 'ตรวจ 2 ใบ' }).click()
+ok(await seen(page.getByRole('heading', { name: 'ไม่มีเรื่องที่ต้องแก้ · ควรตรวจสอบ 1 เรื่อง' })), 'no VAT column: English title + Thai-month dates pass, missing branch warns')
+ok(await seen(page.getByText('1 ใบไม่บอกว่าผู้ซื้อจด VAT หรือไม่')), 'no VAT column: file-level note')
+
+// Required column missing blocks the check
+await upload(csvFile('noinv.csv', ['วันที่,ชื่อลูกค้า,มูลค่าก่อน VAT', '1/9/2569,บริษัท ข จำกัด,100']))
+ok(await seen(page.getByRole('alert').getByText(/ยังขาดช่องจำเป็น/)), 'mapping: error summary lists missing required fields')
+ok(await page.getByRole('button', { name: /^ตรวจ \d+ ใบ$/ }).isDisabled(), 'mapping: check blocked until required fields are matched')
+
+// Credit note, cancelled invoice + replacement, and a reissue with the same number (ask an expert)
+await upload(csvFile('p3.csv', [
+  `${HEAD},ลูกค้าจด VAT,รายการ,จำนวน,ราคาต่อหน่วย,มูลค่าก่อน VAT,ภาษีมูลค่าเพิ่ม,รวมทั้งสิ้น,สถานะ,ออกแทนใบเลขที่,อ้างอิงใบกำกับเดิม,มูลค่าเดิม,มูลค่าที่ถูกต้อง,เหตุผล`,
+  'P-1,03/09/2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,น็อต,10,100,1000.00,70.00,1070.00,ยกเลิก,,,,,',
+  'P-2,03/09/2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,น็อต,10,100,1000.00,70.00,1070.00,,P-1,,,,',
+  'CN-1,10/09/2569,ใบลดหนี้,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,,,,200.00,14.00,214.00,,,P-2,1000.00,800.00,คืนสินค้า 2 ชิ้น',
+  'P-3,12/09/2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,น็อต,1,100,100.00,7.00,107.00,,P-3,,,,',
+]))
+if (await page.getByRole('heading', { name: 'ตรวจการจับคู่คอลัมน์' }).isVisible()) await page.getByRole('button', { name: /^ตรวจ \d+ ใบ$/ }).click()
+ok(await seen(page.getByRole('heading', { name: 'ไม่มีเรื่องที่ต้องแก้ · ควรตรวจสอบ 1 เรื่อง' })), 'P3: cancelled, replacement and credit note pass; same-number reissue asks an expert')
+await page.getByRole('button', { name: 'คัดลอกคำถามถึงนักบัญชี' }).click()
+ok(await seen(page.getByRole('button', { name: 'คัดลอกแล้ว' })), 'P3: question copied for the accountant')
+ok((await page.evaluate(() => navigator.clipboard.readText())).startsWith('สอบถามเรื่อง:'), 'P3: clipboard holds the question')
+await page.getByRole('tab', { name: /สรุป ภ.พ.30/ }).click()
+ok(await seen(filing.getByText('900.00').first()), 'P3: filing nets the credit note and skips the cancelled invoice (1,000 − 200 + 100)')
+await page.getByRole('tab', { name: /รายการใบ/ }).click()
+await page.getByRole('button', { name: 'ดูใบ P-1' }).click()
+ok(await seen(page.locator('article').getByText('ยกเลิก', { exact: true })), 'P3: cancelled stamp on the paper')
+await page.getByRole('tab', { name: /เรื่องที่ต้องดู/ }).click()
+await page.getByText('ตรวจด้วยตาก่อนส่งใบให้ลูกค้า').click()
+await page.getByLabel(/ตีพิมพ์ไว้ หรือพิมพ์จากคอมพิวเตอร์ทั้งฉบับ ไม่ใช่/).check()
+ok(await seen(page.getByText('1/9')), 'manual checklist counts ticks')
+
+// Reference pages
+await page.getByRole('button', { name: 'ข้อกำหนดที่ตรวจ' }).click()
+ok(await seen(page.getByRole('heading', { name: 'ข้อกำหนดที่ตรวจ' })), 'rules page')
+await page.getByRole('button', { name: 'วิธีใช้' }).click()
+ok(await seen(page.getByRole('heading', { name: 'ตรวจในสามขั้น' })), 'help page')
 
 // Phone width, both themes: no horizontal page scroll
 for (const scheme of ['light', 'dark']) {
   const m = await browser.newPage({ viewport: { width: 360, height: 780 }, colorScheme: scheme })
   await m.goto(URL)
-  for (const step of ['upload', 'map', 'results']) {
-    if (step === 'map') await m.getByRole('button', { name: 'ลองด้วยไฟล์ตัวอย่าง' }).click()
-    if (step === 'results') await m.getByRole('button', { name: 'ตรวจ 8 ใบ' }).click()
+  const check = async (step) => {
     const over = await m.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
     ok(over <= 0, `360px ${scheme} ${step}: no horizontal overflow (${over}px)`)
   }
-  await m.screenshot({ path: `${OUT}/6-mobile-${scheme}.png`, fullPage: true })
+  await check('upload')
+  await m.getByRole('button', { name: 'ลองด้วยไฟล์ตัวอย่าง' }).click()
+  await check('issues')
+  for (const t of [/รายการใบ/, /ดูทีละใบ/, /สรุป ภ.พ.30/]) { await m.getByRole('tab', { name: t }).click(); await check(String(t)) }
+  await m.getByRole('button', { name: 'ตรวจการจับคู่คอลัมน์' }).click()
+  await check('mapping')
+  await m.screenshot({ path: `${OUT}/8-mobile-${scheme}.png`, fullPage: true })
   await m.close()
 }
 

@@ -84,3 +84,27 @@ export function downloadTemplate() {
   XLSX.utils.book_append_sheet(wb, ws, 'ใบกำกับภาษีขาย')
   XLSX.writeFile(wb, 'แม่แบบ-ตรวจใบกำกับภาษี.xlsx')
 }
+
+/**
+ * The user's own rows with three columns added: status, problems and fixes. Bookkeepers fix the
+ * data in their own system or in Excel and re-upload (HubSpot "rows with errors" pattern).
+ */
+export function downloadAnnotated(fileName: string, headers: string[], records: Record<string, string>[], lineNos: number[], invoices: Invoice[], results: RowResults[]) {
+  const byLine = new Map<number, number>()
+  invoices.forEach((x, i) => x.lineNos.forEach((n) => byLine.set(n, i)))
+  const order = { fail: 0, warn: 1, needs_expert: 2 } as Record<string, number>
+  const aoa: (string | number)[][] = [[...headers, 'ผลตรวจ', 'ปัญหาที่พบ', 'วิธีแก้']]
+  records.forEach((rec, k) => {
+    const inv = byLine.get(lineNos[k])
+    const found = inv === undefined ? [] : CLAUSES.map((c) => results[inv]?.[c.id]).filter((x) => x && x.verdict in order)
+    found.sort((a, b) => order[a!.verdict] - order[b!.verdict])
+    const status = found.length ? VERDICT_TH[found[0]!.verdict as keyof typeof VERDICT_TH] : 'ผ่าน'
+    aoa.push([...headers.map((h) => safe(rec[h] ?? '')), status, found.map((x) => safe(x!.evidence)).join(' | '), found.map((x) => safe(x!.fix ?? '')).filter(Boolean).join(' | ')])
+  })
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  ws['!cols'] = [...headers.map(() => ({ wch: 16 })), { wch: 14 }, { wch: 60 }, { wch: 60 }]
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: aoa.length - 1, c: aoa[0].length - 1 } }) }
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'ผลตรวจ')
+  XLSX.writeFile(wb, `ผลตรวจ-${fileName.replace(/\.[^.]+$/, '')}.xlsx`)
+}

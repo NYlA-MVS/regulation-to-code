@@ -16,7 +16,11 @@ Product spin-off of the hackathon prototype in `../regulation-to-code` (kept sep
   - Credit and debit notes, s.86/9–86/10 (CN-01 … CN-04)
 - Verdicts: ต้องแก้ (fail), ควรตรวจสอบ (warn), ถามผู้เชี่ยวชาญ (needs expert), ผ่าน, ไม่เกี่ยว
 - ภ.พ.30 summary per premises and tax month with due dates; credit notes subtract, cancelled invoices are not summed
-- Per-invoice "red pen" view, overview matrix, fix list download (CSV with BOM, opens in Excel), print/PDF report, manual checklist for what a file cannot show
+- Results lead with a one-line verdict, then issue cards grouped by rule (what is wrong → how to fix → why, with the law behind a disclosure), an invoice list with severity filters, a per-invoice "red pen" view, and the ภ.พ.30 summary
+- Severity is never colour alone: each level has its own icon shape and label (ต้องแก้ ✕ octagon, ควรตรวจสอบ ! triangle, ถามผู้เชี่ยวชาญ ? bubble)
+- Mapping step is skipped when every column matches; otherwise it shows match status in words and sample values, and blocks until required fields are matched
+- Downloads: fix list (CSV with BOM), the user's own rows with status/problem/fix columns (.xlsx), print/PDF report; "copy question for your accountant" for needs-expert items; manual checklist for what a file cannot show
+- IBM Plex Sans Thai for UI and figures, Sarabun for the invoice paper and quoted law; WCAG 2.2 AA contrast, 44px targets, keyboard and screen-reader labels; works at 360px in light and dark
 - Remembers column mappings per header layout (localStorage); Excel template download
 - No server: the file never leaves the browser
 
