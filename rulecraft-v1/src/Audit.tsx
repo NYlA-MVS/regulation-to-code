@@ -1,0 +1,299 @@
+// Red-pen audit: one invoice at a time, rebuilt as a document, failing fields circled
+// with the rule cited in the margin.
+import { useEffect, useMemo } from 'react'
+import type { ReactNode } from 'react'
+import type { Verdict } from './rules/checks'
+import { CLAUSES } from './rules/clauses'
+import type { Clause } from './rules/clauses'
+import type { Invoice, RowResults } from './rules/engine'
+import { docType, isCancelled } from './rules/checks'
+import { Badge, StatusIcon } from './ui'
+import { LEVEL } from './levels'
+import type { Level } from './levels'
+import { ISSUE_TITLE } from './io/issues'
+import { lineRange } from './io/report'
+import { norm, parseAmount } from './rules/normalize'
+
+type Mark = { n: number; clause: Clause; verdict: Verdict; evidence: string; fix?: string; line?: number }
+
+const PROBLEM: Verdict[] = ['fail', 'needs_expert', 'warn']
+const isProblem = (r: RowResults) => Object.values(r).some((x) => x && PROBLEM.includes(x.verdict))
+
+/** Numbered marks for this invoice, in the order fields appear on the document. */
+function marksFor(res: RowResults): Mark[] {
+  const order = ['TI-01', 'CN-01', 'TI-24', 'TI-21', 'CN-02', 'CN-03', 'CN-04', 'TI-22', 'TI-23', 'TI-25', 'TI-04', 'TI-15', 'TI-07', 'TI-14', 'TI-02', 'TI-08', 'TI-03', 'TI-17', 'TI-18', 'TI-16', 'TI-09', 'TI-10', 'TI-05', 'TI-12', 'TI-06', 'TI-06b', 'TI-13', 'TI-11']
+  const out: Mark[] = []
+  for (const id of order) {
+    const r = res[id as keyof RowResults]
+    const clause = CLAUSES.find((c) => c.id === id)
+    if (r && clause && PROBLEM.includes(r.verdict)) out.push({ n: out.length + 1, clause, verdict: r.verdict, evidence: r.evidence, fix: r.fix, line: r.line })
+  }
+  return out
+}
+
+// The field a clause's red-pen mark sits on, when it differs from all the fields the check reads.
+const MARK_ON: Partial<Record<string, string[]>> = {
+  'TI-06b': ['vat_amount'],
+  'TI-09': ['buyer_tax_id'],
+  'TI-10': ['buyer_branch'],
+  'TI-11': ['total'],
+  'TI-13': ['vat_amount'],
+  'TI-24': ['doc_title'],
+  'TI-12': ['amount_ex_vat'],
+}
+
+/** A field on the paper. Circled in red pen when one of its clauses has a mark. */
+function Field({ field, marks, line, children, className = '' }: { field: string | string[]; marks: Mark[]; line?: number; children: ReactNode; className?: string }) {
+  const fields = Array.isArray(field) ? field : [field]
+  const hit = marks.filter((m) => (m.line === undefined || line === undefined || m.line === line) && (MARK_ON[m.clause.id] ?? m.clause.fields).some((f) => fields.includes(f)))
+  const expertOnly = hit.length > 0 && hit.every((m) => m.verdict !== 'fail')
+  return (
+    <span className={`relative inline-block ${className}`}>
+      {children}
+      {hit.length > 0 && (
+        <>
+          <span className={`pen pointer-events-none absolute -inset-x-2.5 -inset-y-1.5 rounded-[50%] border-[1.6px] ${expertOnly ? 'border-dashed border-[var(--expert-pen)]' : 'border-[var(--redpen)]'}`} aria-hidden="true" />
+          <span className="ml-1 inline-flex gap-0.5 align-super sm:absolute sm:-top-4 sm:-right-6 sm:ml-0">
+            {hit.map((m) => (
+              <a key={m.n} href={`#note-${m.n}`} className={`grid size-6 place-items-center rounded-full font-sans text-[0.75rem] font-bold text-white no-underline ${m.verdict === 'fail' ? 'bg-[var(--redpen)]' : 'bg-[var(--expert-pen)]'}`} aria-label={`ดูหมายเหตุข้อ ${m.n}`}>
+                {m.n}
+              </a>
+            ))}
+          </span>
+        </>
+      )}
+    </span>
+  )
+}
+
+const blank = (v: string) => (norm(v) === '' ? <span className="text-[var(--paper-muted)] italic">(ว่าง)</span> : v)
+const money = (v: string) => {
+  const n = parseAmount(v)
+  return n === null ? blank(v) : n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+export function Audit({
+  invoices,
+  results,
+  index,
+  setIndex,
+  vatPct,
+  onMatrix,
+}: {
+  invoices: Invoice[]
+  results: RowResults[]
+  index: number
+  setIndex: (i: number) => void
+  vatPct: number
+  onMatrix: () => void
+}) {
+  const rows = invoices
+  const i = Math.min(Math.max(index, 0), Math.max(rows.length - 1, 0))
+  const inv = invoices[i]
+  const row = inv?.row
+  const marks = useMemo(() => marksFor(results[i] ?? {}), [results, i])
+  const problemRows = useMemo(() => results.map((r, k) => (isProblem(r) ? k : -1)).filter((k) => k >= 0), [results])
+  const nextProblem = problemRows.find((k) => k > i) ?? problemRows[0]
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('input, select, textarea')) return
+      if (e.key === 'ArrowRight') setIndex(Math.min(i + 1, rows.length - 1))
+      if (e.key === 'ArrowLeft') setIndex(Math.max(i - 1, 0))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [i, rows.length, setIndex])
+
+  if (!row)
+    return (
+      <div className="grid justify-items-start gap-2 rounded-lg border border-line bg-surface p-6">
+        <h3 className="font-semibold">ไฟล์นี้ไม่มีแถวข้อมูล</h3>
+        <p className="text-muted">ตรวจว่าไฟล์มีหัวคอลัมน์และมีอย่างน้อยหนึ่งแถวใต้หัวคอลัมน์ หรือกลับไปเลือกไฟล์ใหม่</p>
+      </div>
+    )
+
+  return (
+    <div className="grid grid-cols-1 gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-1">
+          <button type="button" disabled={i === 0} onClick={() => setIndex(i - 1)} className="btn btn-secondary px-3" aria-label="ใบก่อนหน้า">←</button>
+          <span className="num min-w-[6.5rem] px-2 text-center text-[0.9375rem] text-ink-2">ใบที่ {i + 1} จาก {rows.length}</span>
+          <button type="button" disabled={i >= rows.length - 1} onClick={() => setIndex(i + 1)} className="btn btn-secondary px-3" aria-label="ใบถัดไป">→</button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {nextProblem !== undefined && nextProblem !== i && (
+            <button type="button" onClick={() => setIndex(nextProblem)} className="btn btn-primary">ใบถัดไปที่มีปัญหา</button>
+          )}
+          <button type="button" onClick={onMatrix} className="btn btn-secondary">กลับไปรายการใบ</button>
+        </div>
+      </div>
+
+      <nav aria-label="เลือกใบกำกับภาษี" className="flex max-w-full gap-1 overflow-x-auto pb-1">
+        {results.map((r, k) => {
+          const lv = levelOf(r)
+          return (
+            <button key={k} type="button" onClick={() => setIndex(k)} aria-current={k === i ? 'true' : undefined}
+              aria-label={`ใบที่ ${k + 1} ${LEVEL[lv].label}`} title={`ใบที่ ${k + 1} · ${LEVEL[lv].label}`}
+              className={`num flex h-10 min-w-12 shrink-0 items-center justify-center gap-1 rounded-lg border px-2 text-[0.875rem] ${k === i ? 'border-action bg-action text-on-action' : 'border-line bg-surface hover:bg-sunken'}`}>
+              {lv !== 'pass' && lv !== 'n/a' && <StatusIcon level={lv} size={14} className={k === i ? '' : LEVEL[lv].text} />}
+              {k + 1}
+            </button>
+          )
+        })}
+      </nav>
+
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_21rem]">
+        {/* the paper */}
+        <article aria-label={`ใบกำกับภาษี ${row.invoice_no || `ใบที่ ${i + 1}`}`} className="paper grid gap-5 rounded-sm px-5 py-6 sm:px-9 sm:py-8" key={i}>
+          <header className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-start">
+            <div className="grid gap-1">
+              <Field field="doc_title" marks={marks} className="justify-self-start">
+                <h3 className="text-[1.5rem] leading-tight font-bold">{blank(row.doc_title)}</h3>
+              </Field>
+              <span className="text-[0.75rem] text-[var(--paper-muted)]">จัดหน้าใหม่จากข้อมูลในไฟล์ · แถว {lineRange(inv.lineNos)}{inv.lines.length > 1 ? ` · ${inv.lines.length} รายการ` : ''}</span>
+            </div>
+            <dl className="grid grid-cols-[auto_auto] gap-x-3 text-[0.9375rem] sm:justify-items-end">
+              <dt className="text-[var(--paper-muted)]">เลขที่</dt>
+              <dd><Field field="invoice_no" marks={marks}><span className="num">{blank(row.invoice_no)}</span></Field></dd>
+              <dt className="text-[var(--paper-muted)]">วันที่</dt>
+              <dd><Field field="issue_date" marks={marks}><span className="num">{blank(row.issue_date)}</span></Field></dd>
+            </dl>
+          </header>
+
+          {isCancelled(row) && (
+            <p className="justify-self-start rounded border-2 border-[var(--redpen)] px-3 py-1 text-[1.25rem] font-bold tracking-[0.2em] text-[var(--redpen)]">ยกเลิก</p>
+          )}
+          {(docType(row) !== 'INV' || row.replaces_invoice_no || row.currency || row.delivery_date || row.payment_date) && (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[0.9375rem]">
+              {docType(row) !== 'INV' && <>
+                <dt className="text-[var(--paper-muted)]">อ้างอิงใบกำกับภาษีเดิม</dt>
+                <dd><Field field="ref_invoice_no" marks={marks}><span className="num">{blank(row.ref_invoice_no)}</span></Field></dd>
+                <dt className="text-[var(--paper-muted)]">มูลค่าเดิม → ที่ถูกต้อง</dt>
+                <dd className="num"><Field field={['original_value', 'correct_value']} marks={marks}>{money(row.original_value)} → {money(row.correct_value)}</Field></dd>
+                <dt className="text-[var(--paper-muted)]">เหตุผล</dt>
+                <dd><Field field="reason" marks={marks}>{blank(row.reason)}</Field></dd>
+              </>}
+              {row.replaces_invoice_no && <><dt className="text-[var(--paper-muted)]">ออกแทนใบเลขที่</dt><dd><Field field="replaces_invoice_no" marks={marks}><span className="num">{row.replaces_invoice_no}</span></Field></dd></>}
+              {row.currency && <><dt className="text-[var(--paper-muted)]">สกุลเงิน / อัตราแลกเปลี่ยน</dt><dd className="num"><Field field={['currency', 'exchange_rate']} marks={marks}>{row.currency} · {blank(row.exchange_rate)}</Field></dd></>}
+              {(row.delivery_date || row.payment_date) && <><dt className="text-[var(--paper-muted)]">ส่งมอบ / รับชำระ</dt><dd className="num"><Field field={['delivery_date', 'payment_date']} marks={marks}>{row.delivery_date || '–'} / {row.payment_date || '–'}</Field></dd></>}
+            </dl>
+          )}
+
+          <div className="grid gap-5 border-y border-[var(--paper-rule)] py-4 sm:grid-cols-2">
+            <section className="grid content-start gap-1">
+              <h4 className="text-[0.75rem] font-semibold tracking-[0.04em] text-[var(--paper-muted)]">ผู้ขาย</h4>
+              <Field field={['seller_name', 'seller_address', 'seller_tax_id']} marks={marks} className="justify-self-start">
+                <span className="block font-semibold">{blank(row.seller_name)}</span>
+                <span className="block text-[0.9375rem]">{blank(row.seller_address)}</span>
+                <span className="num block text-[0.9375rem]">เลขผู้เสียภาษี {blank(row.seller_tax_id)}</span>
+              </Field>
+              <Field field="seller_branch" marks={marks} className="justify-self-start text-[0.9375rem]">{blank(row.seller_branch)}</Field>
+            </section>
+            <section className="grid content-start gap-1">
+              <h4 className="text-[0.75rem] font-semibold tracking-[0.04em] text-[var(--paper-muted)]">ผู้ซื้อ</h4>
+              <Field field={['buyer_name', 'buyer_address']} marks={marks} className="justify-self-start">
+                <span className="block font-semibold">{blank(row.buyer_name)}</span>
+                <span className="block text-[0.9375rem]">{blank(row.buyer_address)}</span>
+              </Field>
+              <Field field="buyer_tax_id" marks={marks} className="justify-self-start text-[0.9375rem]">
+                <span className="num">เลขผู้เสียภาษี {norm(row.buyer_is_vat_registrant).toUpperCase() === 'N' && norm(row.buyer_tax_id) === '' ? '— (ผู้ซื้อไม่ได้จด VAT)' : blank(row.buyer_tax_id)}</span>
+              </Field>
+              {norm(row.buyer_is_vat_registrant).toUpperCase() !== 'N' && (
+                <Field field="buyer_branch" marks={marks} className="justify-self-start text-[0.9375rem]">{blank(row.buyer_branch)}</Field>
+              )}
+            </section>
+          </div>
+
+          <div className="grid gap-3 border-b border-[var(--paper-rule)] pb-4 text-[0.9375rem] sm:hidden">
+            {inv.lines.map((l, k) => (
+              <dl key={k} className="grid grid-cols-[auto_1fr] gap-x-4">
+                <dt className="text-[var(--paper-muted)]">รายการ</dt>
+                <dd><Field field="item_desc" marks={marks} line={k}>{blank(l.item_desc)}</Field></dd>
+                <dt className="text-[var(--paper-muted)]">จำนวน</dt>
+                <dd className="num"><Field field="qty" marks={marks} line={k}>{blank(l.qty)}</Field></dd>
+                <dt className="text-[var(--paper-muted)]">ราคาต่อหน่วย</dt>
+                <dd className="num">{money(l.unit_price)}</dd>
+                <dt className="text-[var(--paper-muted)]">มูลค่า</dt>
+                <dd className="num"><Field field="amount_ex_vat" marks={marks} line={k}>{money(l.amount_ex_vat)}</Field></dd>
+              </dl>
+            ))}
+          </div>
+          <div className="hidden pt-2 pr-5 sm:block">
+            <table className="w-full border-collapse text-[0.9375rem]">
+              <thead>
+                <tr className="border-b border-[var(--paper-rule)] text-left text-[0.75rem] text-[var(--paper-muted)]">
+                  <th className="py-1.5 font-semibold">รายการ</th>
+                  <th className="py-1.5 text-right font-semibold">จำนวน</th>
+                  <th className="py-1.5 text-right font-semibold">ราคาต่อหน่วย</th>
+                  <th className="py-1.5 text-right font-semibold">มูลค่า</th>
+                </tr>
+              </thead>
+              <tbody>
+                {inv.lines.map((l, k) => (
+                  <tr key={k} className="border-b border-[var(--paper-rule)]">
+                    <td className="py-3 pr-3"><Field field="item_desc" marks={marks} line={k}>{blank(l.item_desc)}</Field></td>
+                    <td className="num py-3 text-right"><Field field="qty" marks={marks} line={k}>{blank(l.qty)}</Field></td>
+                    <td className="num py-3 text-right">{money(l.unit_price)}</td>
+                    <td className="num py-3 text-right"><Field field="amount_ex_vat" marks={marks} line={k}>{money(l.amount_ex_vat)}</Field></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <dl className="num grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 justify-self-end text-[0.9375rem]">
+            <dt className="text-[var(--paper-muted)]">มูลค่าก่อนภาษี</dt>
+            <dd className="text-right">{money(row.amount_ex_vat)}</dd>
+            <dt className="text-[var(--paper-muted)]">ภาษีมูลค่าเพิ่ม {vatPct}%</dt>
+            <dd className="text-right"><Field field="vat_amount" marks={marks}>{money(row.vat_amount)}</Field></dd>
+            <dt className="border-t border-[var(--paper-rule)] pt-1 font-semibold">รวมทั้งสิ้น</dt>
+            <dd className="border-t border-[var(--paper-rule)] pt-1 text-right font-semibold">{money(row.total)}</dd>
+          </dl>
+        </article>
+
+        {/* the margin */}
+        <aside aria-label="หมายเหตุจากการตรวจ" className="grid content-start gap-3 lg:sticky lg:top-4" aria-live="polite">
+          {marks.length === 0 ? (
+            <div className="grid gap-1 rounded-xl border border-line bg-surface p-4">
+              {isCancelled(row) ? (
+                <>
+                  <span className="font-semibold">ใบนี้ถูกยกเลิก</span>
+                  <span className="text-[0.875rem] text-muted">ไม่นับยอดใน ภ.พ.30 เก็บต้นฉบับที่ประทับ "ยกเลิก" ไว้กับสำเนา และหมายเหตุในรายงานภาษีขาย (ป.86/2542 ข้อ 25)</span>
+                </>
+              ) : (
+                <>
+                  <span className="flex items-center gap-2 font-semibold text-pass"><StatusIcon level="pass" />ใบนี้ผ่านทุกข้อตรวจ</span>
+                  <span className="text-[0.875rem] text-muted">ไม่มีจุดที่ต้องแก้ ข้อที่ไม่เกี่ยวกับใบนี้ (เช่น ผู้ซื้อไม่ได้จด VAT) ถูกข้ามไป</span>
+                </>
+              )}
+            </div>
+          ) : (
+            marks.map((m) => (
+              <section id={`note-${m.n}`} key={m.n} className={`note grid gap-2 rounded-xl border-l-[5px] border bg-surface p-4 ${LEVEL[m.verdict as Level].border} ${m.verdict === 'fail' ? 'border-l-fail' : m.verdict === 'warn' ? 'border-l-warn' : 'border-l-expert'}`}>
+                <header className="flex flex-wrap items-center gap-2">
+                  <span className={`grid size-6 shrink-0 place-items-center rounded-full text-[0.75rem] font-bold text-white ${m.verdict === 'fail' ? 'bg-[var(--redpen)]' : 'bg-[var(--expert-pen)]'}`}>{m.n}</span>
+                  <Badge level={m.verdict as Level} compact />
+                </header>
+                <p className="font-semibold">{ISSUE_TITLE[m.clause.id]}</p>
+                <p className="text-[0.9375rem] text-ink-2">{m.evidence}</p>
+                {m.fix && <p className="rounded-lg bg-sunken px-3 py-2 text-[0.9375rem]"><span className="font-semibold">วิธีแก้ </span>{m.fix}</p>}
+                <details className="text-[0.875rem]">
+                  <summary className="cursor-pointer text-action">ทำไม · {m.clause.source}</summary>
+                  <blockquote className="mt-1 border-l-[3px] border-line-strong pl-3 font-[family-name:var(--font-doc)] text-[1rem]">“{m.clause.quote}”</blockquote>
+                </details>
+              </section>
+            ))
+          )}
+          <p className="text-[0.875rem] text-ink-3">กดลูกศร ← → บนคีย์บอร์ดเพื่อเปลี่ยนใบ</p>
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+const levelOf = (r: RowResults): Level => {
+  const vs = Object.values(r).map((x) => x?.verdict)
+  return vs.includes('fail') ? 'fail' : vs.includes('warn') ? 'warn' : vs.includes('needs_expert') ? 'needs_expert' : 'pass'
+}
