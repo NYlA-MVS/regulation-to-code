@@ -142,6 +142,25 @@ ok(await seen(page.getByRole('heading', { name: 'ข้อกำหนดที�
 await page.getByRole('button', { name: 'วิธีใช้' }).click()
 ok(await seen(page.getByRole('heading', { name: 'ตรวจในสามขั้น' })), 'help page')
 
+// Trial files in test-files/ (regenerate with node scripts/make-test-files.mjs)
+const TRIALS = [
+  ['01-รายงานภาษีขาย-ก.ย.2569-จากโปรแกรมบัญชี.xlsx', 'ต้องแก้ 7 เรื่อง ใน 7 ใบ ก่อนยื่น ภ.พ.30'],
+  ['02-ภาษีขาย-แถวละใบ-Excel-ภาษาไทยรุ่นเก่า-TIS620.csv', 'ต้องแก้ 1 เรื่อง ใน 1 ใบ ก่อนยื่น ภ.พ.30'],
+  ['03-ถูกต้องทั้งหมด-ควรผ่านทุกข้อ.xlsx', 'ทั้ง 10 ใบผ่านทุกข้อตรวจ'],
+  ['04-ใบลดหนี้-ใบเพิ่มหนี้-ยกเลิก-ส่งออก.xlsx', 'ต้องแก้ 3 เรื่อง ใน 3 ใบ ก่อนยื่น ภ.พ.30'],
+  ['05-English-headers-online-accounting.csv', 'ต้องแก้ 2 เรื่อง ใน 2 ใบ ก่อนยื่น ภ.พ.30'],
+  ['06-หลายชีต-ชีตแรกเป็นสรุป.xlsx', 'ทั้ง 6 ใบผ่านทุกข้อตรวจ'],
+  ['08-ไฟล์ใหญ่-2000ใบ.xlsx', 'ต้องแก้ 2 เรื่อง ใน 5 ใบ ก่อนยื่น ภ.พ.30'],
+]
+for (const [file, verdict] of TRIALS) {
+  await page.goto(URL)
+  await page.locator('#file').setInputFiles(`test-files/${file}`)
+  ok(await seen(page.getByRole('heading', { name: verdict })), `trial ${file.slice(0, 2)}: ${verdict}`)
+}
+await page.goto(URL)
+await page.locator('#file').setInputFiles('test-files/07-ขาดคอลัมน์ภาษีมูลค่าเพิ่ม.xlsx')
+ok(await seen(page.getByRole('alert').getByText('ยังขาดช่องจำเป็น 1 ช่อง')), 'trial 07: blocked, VAT column missing')
+
 // Phone width, both themes: no horizontal page scroll
 for (const scheme of ['light', 'dark']) {
   const m = await browser.newPage({ viewport: { width: 360, height: 780 }, colorScheme: scheme })

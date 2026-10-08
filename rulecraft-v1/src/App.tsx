@@ -88,7 +88,9 @@ export default function App() {
   const matchedCount = coreFields.filter((f) => mapping[f]).length
 
   const open = (name: string, sheets: Sheet[]) => {
-    const idx = Math.max(0, sheets.findIndex((s) => s.cells.some((r) => r.some((v) => v.trim()))))
+    // Pick the sheet whose header row names the most known fields (a summary sheet often comes first).
+    const score = (sh: Sheet) => Object.values(autoMap(toTable(sh.cells).headers)).filter(Boolean).length
+    const idx = sheets.reduce((best, sh, i) => (score(sh) > score(sheets[best]) ? i : best), 0)
     // Skip the mapping step when every required and recommended field matched on its own (Dromo, OneSchema).
     const t = toTable(sheets[idx]?.cells ?? [])
     const m = { ...autoMap(t.headers), ...loadMapping(t.headers) }
