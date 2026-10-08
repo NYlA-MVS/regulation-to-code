@@ -5,7 +5,7 @@ import { CLAUSES } from '../rules/clauses'
 import type { Invoice, RowResults } from '../rules/engine'
 import { FIELD_LABEL, FIELDS } from '../rules/engine'
 
-const VERDICT_TH = { fail: 'ต้องแก้', needs_expert: 'ถามผู้เชี่ยวชาญ', pass: 'ผ่าน', 'n/a': 'ไม่เกี่ยว' } as const
+const VERDICT_TH = { fail: 'ต้องแก้', needs_expert: 'ถามผู้เชี่ยวชาญ', warn: 'ควรตรวจสอบ', pass: 'ผ่าน', 'n/a': 'ไม่เกี่ยว' } as const
 
 /** Stops a cell from being run as a formula when the file is opened in Excel. */
 const safe = (v: string) => (/^[=+@\t\r]|^-[^\d]/.test(v) ? `'${v}` : v)
@@ -15,7 +15,7 @@ export const lineRange = (nos: number[]) => (nos.length === 1 ? `${nos[0]}` : `$
 export interface Problem {
   invoice: number
   clauseId: string
-  verdict: 'fail' | 'needs_expert'
+  verdict: 'fail' | 'needs_expert' | 'warn'
   evidence: string
   fix: string
 }
@@ -26,7 +26,7 @@ export function problems(results: RowResults[]): Problem[] {
   results.forEach((r, i) => {
     for (const c of CLAUSES) {
       const x = r[c.id]
-      if (x && (x.verdict === 'fail' || x.verdict === 'needs_expert'))
+      if (x && (x.verdict === 'fail' || x.verdict === 'needs_expert' || x.verdict === 'warn'))
         out.push({ invoice: i, clauseId: c.id, verdict: x.verdict, evidence: x.evidence, fix: x.fix ?? '' })
     }
   })

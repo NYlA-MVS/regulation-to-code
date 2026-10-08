@@ -1,5 +1,5 @@
 // Runs a rule pack over rows, maps columns, compares with expected labels, and mutation-tests the checks.
-import { CHECKS } from './checks'
+import { CHECKS, invoiceKey } from './checks'
 import type { Result, Row, Verdict } from './checks'
 import { CLAUSES, PACKS } from './clauses'
 import type { ClauseId, PackId } from './clauses'
@@ -72,15 +72,14 @@ export function runPack(rows: Row[], pack: PackId, vatRate: number, lines?: Row[
   return rows.map((row, i) => {
     const res: RowResults = {}
     for (const id of ids) res[id] = CHECKS[id](row, { vatRate, seen, lines: lines?.[i] })
-    const inv = norm(row.invoice_no)
-    if (inv) seen.add(inv)
+    if (norm(row.invoice_no)) seen.add(invoiceKey(row))
     return res
   })
 }
 
 export function summary(results: RowResults[]) {
   const byClause = CLAUSES.map((c) => {
-    const counts: Record<Verdict, number> = { pass: 0, fail: 0, 'n/a': 0, needs_expert: 0 }
+    const counts: Record<Verdict, number> = { pass: 0, fail: 0, 'n/a': 0, needs_expert: 0, warn: 0 }
     for (const r of results) {
       const v = r[c.id]?.verdict
       if (v) counts[v]++
@@ -88,7 +87,7 @@ export function summary(results: RowResults[]) {
     return { clause: c, counts, active: results.some((r) => r[c.id]) }
   })
   const rowsWithFail = results.filter((r) => Object.values(r).some((x) => x?.verdict === 'fail')).length
-  const rowsNeedExpert = results.filter((r) => Object.values(r).some((x) => x?.verdict === 'needs_expert')).length
+  const rowsNeedExpert = results.filter((r) => Object.values(r).some((x) => x?.verdict === 'needs_expert' || x?.verdict === 'warn')).length
   return { byClause, rowsWithFail, rowsNeedExpert, rows: results.length }
 }
 
@@ -112,7 +111,7 @@ export function compareExpected(results: RowResults[], expected: Record<string, 
 }
 
 // Mutation testing: break one key field of a passing row; the check must turn to fail.
-const MUTATORS: Record<ClauseId, (r: Row) => Row> = {
+const MUTATORS: Record<ClauseId, (r: Row) => Row | { row: Row; lines: Row[] }> = {
   'TI-01': (r) => ({ ...r, doc_title: 'ใบเสร็จรับเงิน' }),
   'TI-02': (r) => ({ ...r, seller_tax_id: r.seller_tax_id.slice(0, -1) + String((Number(r.seller_tax_id.slice(-1)) + 1) % 10) }),
   'TI-03': (r) => ({ ...r, buyer_address: '' }),
@@ -124,6 +123,8 @@ const MUTATORS: Record<ClauseId, (r: Row) => Row> = {
   'TI-08': (r) => ({ ...r, seller_branch: '' }),
   'TI-09': (r) => ({ ...r, buyer_tax_id: r.buyer_tax_id.slice(0, -1) + String((Number(r.buyer_tax_id.slice(-1)) + 1) % 10) }),
   'TI-10': (r) => ({ ...r, buyer_branch: '' }),
+  'TI-11': (r) => ({ ...r, total: String((parseFloat(r.total.replace(/,/g, '')) || 0) + 5) }),
+  'TI-15': (r) => ({ row: r, lines: [r, { ...r, issue_date: '1999-01-01' }] }),
 }
 
 export function mutationTest(rows: Row[], vatRate: number) {
@@ -131,8 +132,9 @@ export function mutationTest(rows: Row[], vatRate: number) {
     const ctx = { vatRate, seen: new Set<string>() }
     const idx = rows.findIndex((r) => CHECKS[c.id](r, ctx).verdict === 'pass')
     if (idx < 0) return { clause: c, row: null as number | null, killed: false, after: null as Result | null }
-    const after = CHECKS[c.id](MUTATORS[c.id](rows[idx]), { vatRate, seen: new Set() })
-    return { clause: c, row: idx + 1, killed: after.verdict === 'fail', after }
+    const m = MUTATORS[c.id](rows[idx])
+    const after = 'lines' in m && Array.isArray(m.lines) ? CHECKS[c.id](m.row as Row, { vatRate, seen: new Set(), lines: m.lines as Row[] }) : CHECKS[c.id](m as Row, { vatRate, seen: new Set() })
+    return { clause: c, row: idx + 1, killed: after.verdict === 'fail' || after.verdict === 'warn', after }
   })
 }
 
@@ -149,7 +151,7 @@ export interface Invoice {
   lineNos: number[]
 }
 
-const HEADER_KEYS = ['invoice_no', 'issue_date', 'doc_title', 'seller_tax_id', 'seller_branch', 'buyer_name', 'buyer_tax_id', 'buyer_branch'] as const
+const HEADER_KEYS = ['issue_date', 'doc_title', 'buyer_name', 'buyer_tax_id', 'buyer_branch'] as const
 const signature = (r: Row) => HEADER_KEYS.map((k) => norm(r[k]).replace(/\s+/g, ' ')).join('\u0001')
 const near = (a: number, b: number, lines: number) => Math.abs(a - b) <= 0.01 * lines + 1e-9
 const money = (n: number) => n.toFixed(2)
@@ -173,19 +175,27 @@ function invoiceAmount(values: string[], expected: number | null): string {
 }
 
 export function groupInvoices(rows: Row[], vatRate: number, lineNos: number[] = rows.map((_, i) => i + 2)): Invoice[] {
-  const byKey = new Map<string, Invoice>()
+  // Key = seller TIN + seller branch + book + number (invoices are numbered per premises and book).
+  // Consecutive rows with the same key are one invoice even if their headers disagree (TI-15 reports it).
+  // A non-consecutive row joins an earlier invoice only when its header matches too; otherwise it is a
+  // second invoice with the same number, which TI-04 reports as a duplicate.
+  const byKey = new Map<string, Invoice[]>()
   const out: Invoice[] = []
+  let prev: { key: string; inv: Invoice } | null = null
   rows.forEach((r, i) => {
-    const key = norm(r.invoice_no) ? signature(r) : `\u0000${i}`
-    const inv = byKey.get(key)
+    const key = norm(r.invoice_no) ? invoiceKey(r) : ''
+    const same = key ? byKey.get(key) ?? [] : []
+    const inv = key && prev?.key === key ? prev.inv : same.find((x) => signature(x.lines[0]) === signature(r))
     if (inv) {
       inv.lines.push(r)
       inv.lineNos.push(lineNos[i])
-    } else {
-      const fresh: Invoice = { row: r, lines: [r], lineNos: [lineNos[i]] }
-      byKey.set(key, fresh)
-      out.push(fresh)
+      prev = { key, inv }
+      return
     }
+    const fresh: Invoice = { row: r, lines: [r], lineNos: [lineNos[i]] }
+    if (key) byKey.set(key, [...same, fresh])
+    out.push(fresh)
+    prev = { key, inv: fresh }
   })
   for (const inv of out) {
     if (inv.lines.length === 1) continue

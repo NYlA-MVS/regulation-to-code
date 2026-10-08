@@ -66,6 +66,23 @@ await page.getByRole('button', { name: '1 · เลือกไฟล์' }).cli
 await page.locator('#file').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
 ok(await seen(page.getByRole('alert').getByText('รองรับไฟล์ .xlsx .xls และ .csv เท่านั้น')), 'txt: rejected with message')
 
+// No buyer-VAT column: file-level notice, and a buyer TIN without branch is a warning
+const noVat = [
+  'เลขที่ใบกำกับ,วันที่,ชื่อเอกสาร,ชื่อผู้ขาย,ที่อยู่ผู้ขาย,เลขผู้เสียภาษีผู้ขาย,สาขาผู้ขาย,ชื่อลูกค้า,ที่อยู่ลูกค้า,เลขผู้เสียภาษีลูกค้า,สาขาลูกค้า,รายการ,จำนวน,มูลค่าก่อน VAT,ภาษีมูลค่าเพิ่ม,รวมทั้งสิ้น',
+  'N-1,8 ต.ค. 2569,TAX INVOICE,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,นายสมชาย ใจดี,2 ถ.สอง,,,น็อต,10,100.00,7.00,107.00',
+  'N-2,9 ต.ค. 2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,3 ถ.สาม,0105547003211,,สกรู,5,50.00,3.50,53.50',
+].join('\n')
+await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
+await page.locator('#file').setInputFiles({ name: 'novat.csv', mimeType: 'text/csv', buffer: Buffer.from(noVat) })
+await page.getByRole('button', { name: 'ตรวจ 2 ใบ' }).click()
+ok(await seen(page.getByText(/1 ใบไม่มีทั้งข้อมูลว่าผู้ซื้อจด VAT/)), 'no VAT column: file-level notice shown')
+const st = await page.locator('.num.text-\\[1\\.75rem\\]').allInnerTexts()
+ok(JSON.stringify(st) === JSON.stringify(['2', '1', '0', '1']), `no VAT column: English title + Thai-month dates pass, missing branch warns (${st})`)
+await page.getByRole('button', { name: /ใบที่ 2 ควรตรวจสอบ/ }).click()
+ok(await seen(page.getByText('ควรตรวจสอบ', { exact: true }).first()), 'audit: warn note shown')
+await page.screenshot({ path: `${OUT}/8-warn.png`, fullPage: true })
+await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
+
 // Mapping remembered for the same header layout
 await page.getByRole('button', { name: 'ลองด้วยไฟล์ตัวอย่าง' }).click()
 await page.locator('#map-total').selectOption('')

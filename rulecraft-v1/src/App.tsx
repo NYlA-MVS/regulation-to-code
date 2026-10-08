@@ -19,6 +19,7 @@ const V: Record<Verdict, { label: string; short: string; cls: string }> = {
   fail: { label: 'ต้องแก้', short: '✗', cls: 'bg-fail-bg text-fail' },
   'n/a': { label: 'ไม่เกี่ยว', short: '–', cls: 'bg-na-bg text-na' },
   needs_expert: { label: 'ถามผู้เชี่ยวชาญ', short: '?', cls: 'bg-expert-bg text-expert' },
+  warn: { label: 'ควรตรวจสอบ', short: '!', cls: 'bg-expert-bg text-expert' },
 }
 const STATUS: Record<string, string> = { checkable: 'ตรวจด้วยข้อมูลได้', partial: 'ตรวจได้บางส่วน', needs_expert: 'บางกรณีต้องให้ผู้เชี่ยวชาญยืนยัน' }
 /** Fields an invoice cannot be checked without. Others fall back to n/a or fail visibly. */
@@ -59,6 +60,8 @@ const STEPS: { id: Step; label: string }[] = [
   { id: 'results', label: '3 · ผลตรวจ' },
 ]
 const isFlow = (s: Step) => s === 'upload' || s === 'map' || s === 'results'
+const PROBLEM: Verdict[] = ['fail', 'needs_expert', 'warn']
+const hasProblem = (r: Record<string, { verdict: Verdict } | undefined>) => Object.values(r).some((x) => x && PROBLEM.includes(x.verdict))
 
 function Chip({ v, title }: { v: Verdict; title?: string }) {
   return (
@@ -115,7 +118,9 @@ export default function App() {
   const activeClauses = CLAUSES.filter((c) => (PACKS[PACK].clauses as readonly string[]).includes(c.id))
   const unmappedKey = KEY_FIELDS.filter((f) => !mapping[f])
   const unmappedOther = FIELDS.filter((f) => !mapping[f] && !KEY_FIELDS.includes(f) && !OPTIONAL.includes(f))
-  const passCount = sum.rows - results.filter((r) => Object.values(r).some((x) => x && (x.verdict === 'fail' || x.verdict === 'needs_expert'))).length
+  const passCount = sum.rows - results.filter(hasProblem).length
+  // Without a VAT-registrant column or buyer TIN, TI-09/TI-10 cannot apply to those invoices; say so once for the file.
+  const unknownBuyerVat = invoices.filter((x) => !x.row.buyer_is_vat_registrant?.trim() && !x.row.buyer_tax_id?.trim()).length
 
   const open = (name: string, sheets: Sheet[]) => {
     setSource({ name, sheets })
@@ -144,7 +149,7 @@ export default function App() {
     setStep('results')
   }
 
-  const visible = results.map((r, i) => ({ r, i })).filter(({ r }) => !onlyProblems || Object.values(r).some((x) => x && (x.verdict === 'fail' || x.verdict === 'needs_expert')))
+  const visible = results.map((r, i) => ({ r, i })).filter(({ r }) => !onlyProblems || hasProblem(r))
   const selected = cell ? results[cell.inv]?.[cell.clause] : undefined
   const selectedClause = cell ? CLAUSES.find((c) => c.id === cell.clause) : undefined
   const baseName = (source?.name ?? 'ผลตรวจ').replace(/\.[^.]+$/, '')
@@ -278,20 +283,23 @@ export default function App() {
               <Stat n={sum.rows} label="ใบทั้งหมด" />
               <Stat n={passCount} label="ผ่านทุกข้อ" cls="text-pass" />
               <Stat n={sum.rowsWithFail} label="มีจุดต้องแก้" cls="text-fail" />
-              <Stat n={sum.rowsNeedExpert} label="ควรถามผู้เชี่ยวชาญ" cls="text-expert" />
+              <Stat n={sum.rowsNeedExpert} label="ควรตรวจสอบเพิ่ม" cls="text-expert" />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button type="button" disabled={probs.length === 0} onClick={() => download(`รายการต้องแก้-${baseName}.csv`, fixListCsv(invoices, results))} className={`${btnPrimary} disabled:opacity-40`}>ดาวน์โหลดรายการที่ต้องแก้ (Excel)</button>
               <button type="button" onClick={() => window.print()} className={btnGhost}>พิมพ์ / บันทึกเป็น PDF</button>
               <span className="text-[0.8125rem] text-ink-3">{probs.length} จุด จาก {source.name}</span>
             </div>
+            {unknownBuyerVat > 0 && (
+              <p className="rounded-lg bg-expert-bg px-3 py-2 text-[0.875rem] text-expert">{unknownBuyerVat} ใบไม่มีทั้งข้อมูลว่าผู้ซื้อจด VAT และเลขผู้เสียภาษีผู้ซื้อ จึงยังไม่ได้ตรวจ TI-09 และ TI-10 ถ้าผู้ซื้อรายใดจด VAT ใบนั้นต้องมีเลขผู้เสียภาษีและสาขาของผู้ซื้อ (ประกาศอธิบดีฯ ฉบับที่ 199) แนะนำให้เพิ่มคอลัมน์ “ผู้ซื้อจด VAT” ในไฟล์</p>
+            )}
             {sum.rows > 0 && (
               <div className="flex flex-wrap gap-2">
-                {sum.byClause.filter((b) => b.active && (b.counts.fail || b.counts.needs_expert)).sort((a, b) => b.counts.fail - a.counts.fail).map(({ clause, counts }) => (
+                {sum.byClause.filter((b) => b.active && (b.counts.fail || b.counts.needs_expert || b.counts.warn)).sort((a, b) => b.counts.fail - a.counts.fail).map(({ clause, counts }) => (
                   <span key={clause.id} className="rounded-lg border border-line bg-raise px-3 py-1.5 text-[0.8125rem]">
                     <span className="num font-semibold">{clause.id}</span> {clause.plain}
                     {counts.fail > 0 && <span className="num text-fail"> · {counts.fail} ใบ</span>}
-                    {counts.needs_expert > 0 && <span className="num text-expert"> · ถาม {counts.needs_expert}</span>}
+                    {counts.needs_expert + counts.warn > 0 && <span className="num text-expert"> · ตรวจสอบ {counts.needs_expert + counts.warn}</span>}
                   </span>
                 ))}
               </div>
@@ -455,14 +463,14 @@ function Help() {
 
 function PrintReport({ name, vatPct, total, pass, fail, expert, items }: {
   name: string; vatPct: number; total: number; pass: number; fail: number; expert: number
-  items: { invoice: number; no: string; lines: string; clauseId: string; verdict: 'fail' | 'needs_expert'; evidence: string; fix: string }[]
+  items: { invoice: number; no: string; lines: string; clauseId: string; verdict: 'fail' | 'needs_expert' | 'warn'; evidence: string; fix: string }[]
 }) {
   const [checkedAt] = useState(() => new Date().toLocaleString('th-TH'))
   return (
     <div className="print-only text-[11pt]">
       <h1 className="text-[16pt] font-bold">รายงานตรวจใบกำกับภาษีขาย</h1>
       <p>ไฟล์: {name} · ตรวจเมื่อ {checkedAt} · อัตรา VAT {vatPct}% · {PACKS[PACK].note}</p>
-      <p className="mt-2">ทั้งหมด {total} ใบ · ผ่านทุกข้อ {pass} ใบ · มีจุดต้องแก้ {fail} ใบ · ควรถามผู้เชี่ยวชาญ {expert} ใบ</p>
+      <p className="mt-2">ทั้งหมด {total} ใบ · ผ่านทุกข้อ {pass} ใบ · มีจุดต้องแก้ {fail} ใบ · ควรตรวจสอบเพิ่ม {expert} ใบ</p>
       {items.length > 0 && (
         <table className="mt-4 w-full border-collapse text-[9.5pt]">
           <thead>

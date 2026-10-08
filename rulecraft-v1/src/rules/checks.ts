@@ -1,9 +1,10 @@
 // One pure check per clause. Each returns a verdict with evidence and a fix hint.
 import type { ClauseId } from './clauses'
-import { compact, isBlank, norm, parseAmount } from './normalize'
-import { isBranchNotation, isPlaceholder, parseDate, taxIdProblem } from './validators'
+import { compact, digitsOnly, isBlank, norm, parseAmount } from './normalize'
+import { branchCode, isBranchNotation, isPlaceholder, parseDate, splitTaxId, taxIdProblem } from './validators'
 
-export type Verdict = 'pass' | 'fail' | 'n/a' | 'needs_expert'
+/** warn: likely a problem but depends on facts the file does not show. */
+export type Verdict = 'pass' | 'fail' | 'n/a' | 'needs_expert' | 'warn'
 export type Row = Record<string, string>
 export interface Result {
   verdict: Verdict
@@ -24,6 +25,7 @@ const TITLE = compact('ใบกำกับภาษี')
 const ABBREVIATED = compact('อย่างย่อ')
 const pass = (evidence: string): Result => ({ verdict: 'pass', evidence })
 const fail = (evidence: string, fix: string): Result => ({ verdict: 'fail', evidence, fix })
+const warn = (evidence: string, fix: string): Result => ({ verdict: 'warn', evidence, fix })
 const show = (v: string | undefined) => (isBlank(v) ? '(ว่าง)' : `"${norm(v)}"`)
 
 const registrant = (row: Row): boolean | null => {
@@ -41,8 +43,12 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
         return { verdict: 'needs_expert', evidence: `ชื่อเอกสาร ${show(row.doc_title)} เป็นใบกำกับภาษีอย่างย่อ`, fix: 'ใบกำกับภาษีอย่างย่อไม่ใช่แบบเต็มรูป ให้ผู้เชี่ยวชาญยืนยันว่ารายการนี้ต้องออกแบบเต็มรูปหรือไม่' }
       return pass(`ชื่อเอกสาร ${show(row.doc_title)} มีคำว่า ใบกำกับภาษี`)
     }
-    if (/taxinvoice/i.test(t))
-      return { verdict: 'needs_expert', evidence: `มีแต่คำภาษาอังกฤษ ${show(row.doc_title)}`, fix: 'ยังไม่ยืนยันว่าชื่อภาษาอังกฤษอย่างเดียวใช้แทนได้ ให้ผู้เชี่ยวชาญตรวจ' }
+    // ประกาศอธิบดีฯ ฉบับที่ 92 ข้อ 2 and ป.86/2542 ข้อ 8: English with Thai baht counts as approved.
+    if (/taxinvoice/i.test(t)) {
+      if (/abb|abbreviated/i.test(t))
+        return { verdict: 'needs_expert', evidence: `ชื่อเอกสาร ${show(row.doc_title)} เป็นใบกำกับภาษีอย่างย่อ`, fix: 'ใบกำกับภาษีอย่างย่อไม่ใช่แบบเต็มรูป ให้ผู้เชี่ยวชาญยืนยันว่ารายการนี้ต้องออกแบบเต็มรูปหรือไม่' }
+      return pass(`ชื่อเอกสาร ${show(row.doc_title)} เป็นภาษาอังกฤษ ใช้ได้เมื่อเป็นเงินบาท (ประกาศอธิบดีฯ ฉบับที่ 92 ข้อ 2)`)
+    }
     return fail(`ชื่อเอกสาร ${show(row.doc_title)} ไม่มีคำว่า ใบกำกับภาษี`, 'เพิ่มคำว่า "ใบกำกับภาษี" ในตำแหน่งที่เห็นได้ชัดบนเอกสาร')
   },
   'TI-02': (row) => {
@@ -62,7 +68,9 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
   'TI-04': (row, ctx) => {
     const n = norm(row.invoice_no)
     if (n === '') return fail('ไม่มีเลขที่ใบกำกับภาษี', 'ใส่เลขลำดับใบกำกับภาษี')
-    if (ctx.seen.has(n)) return fail(`เลขที่ "${n}" ซ้ำกับแถวก่อนหน้า`, 'เลขที่ใบกำกับภาษีต้องไม่ซ้ำกัน')
+    const book = norm(row.book_no)
+    if (ctx.seen.has(invoiceKey(row)))
+      return fail(`เลขที่ "${n}"${book ? ` เล่มที่ "${book}"` : ''} ของสาขาเดียวกันซ้ำกับใบก่อนหน้า`, 'เลขที่ใบกำกับภาษีต้องไม่ซ้ำกันภายในสาขาและเล่มเดียวกัน ถ้าเป็นใบที่ยกเลิกแล้วออกใหม่ ให้ระบุเลขที่ใหม่')
     return pass(`เลขที่ "${n}" ไม่ซ้ำ`)
   },
   'TI-05': (row, ctx) => {
@@ -86,7 +94,8 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     const vat = parseAmount(row.vat_amount)
     const amt = parseAmount(row.amount_ex_vat)
     if (vat === null || amt === null || amt < 0 || !Number.isFinite(ctx.vatRate)) return { verdict: 'n/a', evidence: 'ตรวจการคำนวณไม่ได้เพราะยอดภาษีหรือมูลค่าไม่ถูกต้อง' }
-    const want = Math.round(amt * ctx.vatRate * 100) / 100
+    // ป.86/2542 ข้อ 4(6): round half up at the third decimal.
+    const want = roundHalfUp(amt * ctx.vatRate)
     // Per-line rounding can drift by up to 1 satang per line item.
     if (Math.abs(vat - want) > 0.01 * (ctx.lines?.length ?? 1) + 1e-9)
       return fail(`ภาษี ${vat.toFixed(2)} บาท แต่ ${amt.toFixed(2)} × ${(ctx.vatRate * 100).toFixed(0)}% = ${want.toFixed(2)} บาท`, 'คำนวณภาษีมูลค่าเพิ่มใหม่')
@@ -97,20 +106,70 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     if (!parseDate(row.issue_date)) return fail(`วันที่ ${show(row.issue_date)} ไม่ใช่วันที่จริง`, 'ตรวจวันที่อีกครั้ง')
     return pass(`วันที่ ${norm(row.issue_date)}`)
   },
-  'TI-08': (row) =>
-    isBranchNotation(row.seller_branch)
-      ? pass(`ผู้ขาย: ${show(row.seller_branch)}`)
-      : fail(`สาขาผู้ขาย ${show(row.seller_branch)} ไม่ตรงรูปแบบ`, 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ขาย'),
+  'TI-08': (row) => {
+    const branch = isBlank(row.seller_branch) ? (splitTaxId(row.seller_tax_id).branch ?? '') : row.seller_branch
+    return isBranchNotation(branch)
+      ? pass(`ผู้ขาย: ${show(branch)}`)
+      : fail(`สาขาผู้ขาย ${show(row.seller_branch)} ไม่ตรงรูปแบบ`, 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ขาย')
+  },
   'TI-09': (row) => {
     const reg = registrant(row)
-    if (reg !== true) return { verdict: 'n/a', evidence: reg === false ? 'ผู้ซื้อไม่ได้จด VAT' : 'ไม่ทราบว่าผู้ซื้อจด VAT หรือไม่' }
+    if (reg === false) return { verdict: 'n/a', evidence: 'ผู้ซื้อไม่ได้จด VAT' }
+    if (reg === null) {
+      if (isBlank(row.buyer_tax_id)) return { verdict: 'n/a', evidence: 'ไม่ทราบว่าผู้ซื้อจด VAT หรือไม่ และไม่มีเลขผู้เสียภาษีผู้ซื้อ' }
+      const p = taxIdProblem(row.buyer_tax_id)
+      return p
+        ? warn(`เลขผู้เสียภาษีผู้ซื้อ ${show(row.buyer_tax_id)}: ${p} (ไม่ได้ระบุว่าผู้ซื้อจด VAT)`, 'ถ้าผู้ซื้อจด VAT ต้องแก้เลขให้ถูก ลูกค้าจึงจะใช้ภาษีซื้อได้ และควรใส่ช่อง "ผู้ซื้อจด VAT" ในไฟล์')
+        : pass('เลขผู้เสียภาษีผู้ซื้อถูกรูปแบบ')
+    }
     const p = taxIdProblem(row.buyer_tax_id)
     return p ? fail(`เลขผู้เสียภาษีผู้ซื้อ ${show(row.buyer_tax_id)}: ${p}`, 'ขอเลขผู้เสียภาษี 13 หลักจากผู้ซื้อ') : pass('เลขผู้เสียภาษีผู้ซื้อถูกรูปแบบ')
   },
   'TI-10': (row) => {
-    if (registrant(row) !== true) return { verdict: 'n/a', evidence: 'ตรวจเฉพาะผู้ซื้อที่จด VAT' }
-    return isBranchNotation(row.buyer_branch)
-      ? pass(`ผู้ซื้อ: ${show(row.buyer_branch)}`)
+    const reg = registrant(row)
+    const branch = isBlank(row.buyer_branch) ? (splitTaxId(row.buyer_tax_id).branch ?? '') : row.buyer_branch
+    if (reg === false) return { verdict: 'n/a', evidence: 'ตรวจเฉพาะผู้ซื้อที่จด VAT' }
+    if (reg === null) {
+      if (isBlank(row.buyer_tax_id)) return { verdict: 'n/a', evidence: 'ไม่ทราบว่าผู้ซื้อจด VAT หรือไม่ และไม่มีเลขผู้เสียภาษีผู้ซื้อ' }
+      return isBranchNotation(branch)
+        ? pass(`ผู้ซื้อ: ${show(branch)}`)
+        : warn(`ผู้ซื้อมีเลขผู้เสียภาษีแต่สาขาผู้ซื้อ ${show(row.buyer_branch)} ไม่ตรงรูปแบบ (ไม่ได้ระบุว่าผู้ซื้อจด VAT)`, 'ถ้าผู้ซื้อจด VAT ต้องระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ซื้อ')
+    }
+    return isBranchNotation(branch)
+      ? pass(`ผู้ซื้อ: ${show(branch)}`)
       : fail(`สาขาผู้ซื้อ ${show(row.buyer_branch)} ไม่ตรงรูปแบบ`, 'ระบุ "สำนักงานใหญ่" หรือ "สาขาที่ ..." ของผู้ซื้อ')
   },
+  'TI-11': (row, ctx) => {
+    if (isBlank(row.total)) return { verdict: 'n/a', evidence: 'ไฟล์ไม่มียอดรวมทั้งสิ้น' }
+    const total = parseAmount(row.total)
+    const amt = parseAmount(row.amount_ex_vat)
+    const vat = parseAmount(row.vat_amount)
+    if (total === null) return warn(`ยอดรวม ${show(row.total)} ไม่ใช่ตัวเลข`, 'ตรวจช่องยอดรวมทั้งสิ้น')
+    if (amt === null || vat === null) return { verdict: 'n/a', evidence: 'ตรวจยอดรวมไม่ได้เพราะมูลค่าหรือภาษีไม่ใช่ตัวเลข' }
+    const want = Math.round((amt + vat) * 100) / 100
+    if (Math.abs(total - want) > 0.01 * (ctx.lines?.length ?? 1) + 1e-9)
+      return warn(`ยอดรวม ${total.toFixed(2)} บาท แต่มูลค่า ${amt.toFixed(2)} + ภาษี ${vat.toFixed(2)} = ${want.toFixed(2)} บาท`, 'ตรวจมูลค่า ภาษี และยอดรวมอีกครั้ง ถ้ามีส่วนลด ต้องแสดงในใบและคำนวณภาษีหลังหักส่วนลด')
+    return pass(`ยอดรวม ${total.toFixed(2)} = มูลค่า + ภาษี`)
+  },
+  'TI-15': (row, ctx) => {
+    const lines = ctx.lines ?? [row]
+    if (lines.length < 2) return pass('ใบนี้มีบรรทัดเดียว')
+    const differ = HEADER_FIELDS.filter(([f]) => lines.some((l) => headerValue(f, l) !== headerValue(f, lines[0]))).map(([, label]) => label)
+    if (differ.length)
+      return fail(`บรรทัดของเลขที่ "${norm(row.invoice_no)}" มี${differ.join(', ')}ไม่ตรงกัน`, 'ถ้าเป็นใบเดียวกัน ให้แก้หัวใบทุกบรรทัดให้ตรงกัน ถ้าเป็นคนละใบ แปลว่าใช้เลขที่ซ้ำ ต้องออกเลขที่ใหม่')
+    return pass(`หัวใบตรงกันทั้ง ${lines.length} บรรทัด`)
+  },
+}
+
+const HEADER_FIELDS = [['issue_date', 'วันที่'], ['doc_title', 'ชื่อเอกสาร'], ['buyer_name', 'ชื่อผู้ซื้อ'], ['buyer_tax_id', 'เลขผู้เสียภาษีผู้ซื้อ'], ['buyer_branch', 'สาขาผู้ซื้อ']] as const
+const headerValue = (f: string, r: Row) => (f === 'buyer_branch' ? branchCode(r[f]) : f === 'buyer_tax_id' ? digitsOnly(r[f]) : compact(r[f]).toLowerCase())
+
+/** ป.86/2542 ข้อ 4(6): round VAT half up at the third decimal. The epsilon absorbs binary float error. */
+export function roundHalfUp(n: number): number {
+  return Math.round((n + Math.sign(n) * 1e-9) * 100) / 100
+}
+
+/** Invoices are numbered per business premises and per book, so the duplicate key includes both. */
+export function invoiceKey(row: Row): string {
+  return [splitTaxId(row.seller_tax_id).tin, branchCode(row.seller_branch), norm(row.book_no), norm(row.invoice_no)].join('\u0001')
 }

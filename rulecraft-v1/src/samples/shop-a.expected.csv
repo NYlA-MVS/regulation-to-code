@@ -1,7 +1,7 @@
 ﻿row,invoice_no,TI-01,TI-02,TI-03,TI-04,TI-05,TI-06,TI-06b,TI-07,TI-08,TI-09,TI-10,planted
 1,INV2611-0001,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,clean
 2,INV2611-0002,fail,pass,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,title lacks ใบกำกับภาษี
-3,INV2611-0003,needs_expert,pass,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,English-only title
+3,INV2611-0003,pass,pass,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,English-only title (ประกาศฯ 92: pass)
 4,INV2611-0004,pass,fail,pass,pass,pass,pass,pass,pass,pass,pass,pass,seller tax ID bad check digit
 5,INV2611-0005,pass,pass,fail,pass,pass,pass,pass,pass,pass,pass,pass,buyer address missing
 6,INV2611-0006,pass,pass,fail,pass,pass,pass,pass,pass,pass,pass,pass,placeholder buyer name

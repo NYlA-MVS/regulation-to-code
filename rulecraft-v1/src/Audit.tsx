@@ -11,12 +11,12 @@ import { norm, parseAmount } from './rules/normalize'
 
 type Mark = { n: number; clause: Clause; verdict: Verdict; evidence: string; fix?: string; line?: number }
 
-const PROBLEM: Verdict[] = ['fail', 'needs_expert']
+const PROBLEM: Verdict[] = ['fail', 'needs_expert', 'warn']
 const isProblem = (r: RowResults) => Object.values(r).some((x) => x && PROBLEM.includes(x.verdict))
 
 /** Numbered marks for this invoice, in the order fields appear on the document. */
 function marksFor(res: RowResults): Mark[] {
-  const order = ['TI-01', 'TI-04', 'TI-07', 'TI-02', 'TI-08', 'TI-03', 'TI-09', 'TI-10', 'TI-05', 'TI-06', 'TI-06b']
+  const order = ['TI-01', 'TI-04', 'TI-15', 'TI-07', 'TI-02', 'TI-08', 'TI-03', 'TI-09', 'TI-10', 'TI-05', 'TI-06', 'TI-06b', 'TI-11']
   const out: Mark[] = []
   for (const id of order) {
     const r = res[id as keyof RowResults]
@@ -31,13 +31,14 @@ const MARK_ON: Partial<Record<string, string[]>> = {
   'TI-06b': ['vat_amount'],
   'TI-09': ['buyer_tax_id'],
   'TI-10': ['buyer_branch'],
+  'TI-11': ['total'],
 }
 
 /** A field on the paper. Circled in red pen when one of its clauses has a mark. */
 function Field({ field, marks, line, children, className = '' }: { field: string | string[]; marks: Mark[]; line?: number; children: ReactNode; className?: string }) {
   const fields = Array.isArray(field) ? field : [field]
   const hit = marks.filter((m) => (m.line === undefined || line === undefined || m.line === line) && (MARK_ON[m.clause.id] ?? m.clause.fields).some((f) => fields.includes(f)))
-  const expertOnly = hit.length > 0 && hit.every((m) => m.verdict === 'needs_expert')
+  const expertOnly = hit.length > 0 && hit.every((m) => m.verdict !== 'fail')
   return (
     <span className={`relative inline-block ${className}`}>
       {children}
@@ -117,10 +118,10 @@ export function Audit({
         <nav aria-label="เลือกใบกำกับภาษี" className="flex max-w-full gap-1 overflow-x-auto pb-1">
           {results.map((r, k) => {
             const bad = Object.values(r).some((x) => x?.verdict === 'fail')
-            const ask = !bad && Object.values(r).some((x) => x?.verdict === 'needs_expert')
+            const ask = !bad && Object.values(r).some((x) => x?.verdict === 'needs_expert' || x?.verdict === 'warn')
             return (
               <button key={k} type="button" onClick={() => setIndex(k)} aria-current={k === i ? 'true' : undefined}
-                aria-label={`ใบที่ ${k + 1}${bad ? ' มีข้อไม่ผ่าน' : ask ? ' ต้องถามผู้เชี่ยวชาญ' : ' ผ่าน'}`}
+                aria-label={`ใบที่ ${k + 1}${bad ? ' มีข้อไม่ผ่าน' : ask ? ' ควรตรวจสอบ' : ' ผ่าน'}`}
                 className={`num relative grid h-8 min-w-8 shrink-0 place-items-center rounded-md border text-[0.75rem] ${k === i ? 'border-action bg-action text-on-action' : 'border-line bg-surface hover:border-ink'}`}>
                 {k + 1}
                 {(bad || ask) && <span className={`absolute -top-1 -right-1 size-2 rounded-full ${bad ? 'bg-[var(--redpen)]' : 'bg-[var(--expert-pen)]'}`} />}
@@ -246,7 +247,7 @@ export function Audit({
               <section id={`note-${m.n}`} key={m.n} className={`note grid gap-2 rounded-lg border bg-surface p-4 ${m.verdict === 'fail' ? 'border-[var(--redpen-line)]' : 'border-[var(--expert-line)]'}`}>
                 <header className="flex items-baseline gap-2">
                   <span className={`grid size-6 shrink-0 place-items-center rounded-full text-[0.75rem] font-bold text-white ${m.verdict === 'fail' ? 'bg-[var(--redpen)]' : 'bg-[var(--expert-pen)]'}`}>{m.n}</span>
-                  <span className={`font-semibold ${m.verdict === 'fail' ? 'text-[var(--redpen-text)]' : 'text-expert'}`}>{m.verdict === 'fail' ? 'ต้องแก้' : 'ถามผู้เชี่ยวชาญ'}</span>
+                  <span className={`font-semibold ${m.verdict === 'fail' ? 'text-[var(--redpen-text)]' : 'text-expert'}`}>{m.verdict === 'fail' ? 'ต้องแก้' : m.verdict === 'warn' ? 'ควรตรวจสอบ' : 'ถามผู้เชี่ยวชาญ'}</span>
                   <span className="num text-[0.8125rem] text-muted">{m.clause.id}</span>
                 </header>
                 <p className="text-[0.9375rem]">{m.evidence}</p>

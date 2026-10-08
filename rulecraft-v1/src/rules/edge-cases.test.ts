@@ -191,10 +191,10 @@ describe('Registrant flag edge cases', () => {
     testRow('ไม่จด', 'n/a')
     testRow('ไม่ใช่', 'n/a')
 
-    // Should be n/a for unknown values
-    testRow('', 'n/a')
-    testRow('maybe', 'n/a')
-    testRow('unknown', 'n/a')
+    // Unknown status: the buyer TIN is still checked when present (here it is valid)
+    testRow('', 'pass')
+    testRow('maybe', 'pass')
+    testRow('unknown', 'pass')
   })
 })
 
