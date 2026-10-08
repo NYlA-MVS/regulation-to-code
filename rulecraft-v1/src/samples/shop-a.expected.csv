@@ -1,0 +1,31 @@
+﻿row,invoice_no,TI-01,TI-02,TI-03,TI-04,TI-05,TI-06,TI-06b,TI-07,TI-08,TI-09,TI-10,planted
+1,INV2611-0001,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,clean
+2,INV2611-0002,fail,pass,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,title lacks ใบกำกับภาษี
+3,INV2611-0003,needs_expert,pass,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,English-only title
+4,INV2611-0004,pass,fail,pass,pass,pass,pass,pass,pass,pass,pass,pass,seller tax ID bad check digit
+5,INV2611-0005,pass,pass,fail,pass,pass,pass,pass,pass,pass,pass,pass,buyer address missing
+6,INV2611-0006,pass,pass,fail,pass,pass,pass,pass,pass,pass,pass,pass,placeholder buyer name
+7,INV2611-0001,pass,pass,pass,fail,pass,pass,pass,pass,pass,n/a,n/a,duplicate invoice no. (first seen row 1)
+8,INV2611-0008,pass,pass,pass,pass,fail,pass,pass,pass,pass,n/a,n/a,quantity 0
+9,INV2611-0009,pass,pass,pass,pass,pass,fail,n/a,pass,pass,pass,pass,VAT not shown separately
+10,INV2611-0010,pass,pass,pass,pass,pass,pass,fail,pass,pass,pass,pass,VAT arithmetic wrong
+11,INV2611-0011,pass,pass,pass,pass,pass,pass,pass,fail,pass,pass,pass,impossible date
+12,INV2611-0012,pass,pass,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,Buddhist-era date (valid)
+13,INV2611-0013,pass,pass,pass,pass,pass,pass,pass,pass,fail,n/a,n/a,seller head office/branch missing
+14,INV2611-0014,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,seller branch 2 (valid)
+15,INV2611-0015,pass,pass,pass,pass,pass,pass,pass,pass,pass,fail,pass,"VAT-registered buyer, tax ID missing"
+16,INV2611-0016,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,fail,"VAT-registered buyer, branch missing"
+17,INV2611-0017,pass,pass,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,non-registered buyer (TI-09/10 n/a)
+18,INV2611-0018,fail,pass,fail,pass,pass,pass,fail,pass,pass,n/a,n/a,3 errors
+19,INV2611-0019,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,HQ notation (valid)
+20,INV2611-0020,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,00000 code (valid)
+21,INV2611-0021,pass,pass,pass,pass,fail,pass,pass,pass,pass,pass,pass,item description missing
+22,INV2611-0022,pass,fail,pass,pass,pass,pass,pass,pass,pass,n/a,n/a,seller tax ID 12 digits
+23,INV2611-0023,pass,pass,pass,pass,pass,pass,pass,pass,pass,fail,pass,buyer tax ID bad check digit
+24,INV2611-0024,pass,pass,pass,pass,fail,pass,n/a,pass,pass,pass,pass,negative amount
+25,INV2611-0025,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,clean
+26,INV2611-0026,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,spaced title (passes after normalisation)
+27,INV2611-0027,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,buyer branch English notation (valid)
+28,INV2611-0028,pass,pass,pass,pass,pass,pass,pass,fail,pass,n/a,n/a,date missing
+29,INV2611-0029,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,pass,clean
+30,INV2611-0030,pass,fail,pass,pass,pass,pass,pass,pass,pass,pass,pass,seller address missing

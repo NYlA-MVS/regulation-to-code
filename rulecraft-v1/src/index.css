@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/* Red-pen audit: a quiet canvas, a paper invoice as the lead, red pen reserved for audit marks.
+   Roles: canvas · surface · ink/muted · line · action (ballpoint navy) · redpen (fail marks) · expert (amber marks) · pass. */
+:root {
+  --paper: #eceee9; --raise: #ffffff; --panel: #e4e7e1; --ink: #17201c; --ink-2: #4b5550; --ink-3: #66706b;
+  --line: #d2d7d0; --accent: #1f3a5f; --on-accent: #ffffff;
+  --pass: #24714a; --fail: #b8241b; --na: #7b827e; --expert: #8a5800;
+  --pass-bg: #e2f1e8; --fail-bg: #fbe6e3; --na-bg: #e9ece8; --expert-bg: #f8edd5;
+  --redpen: #c8281e; --redpen-text: #b8241b; --redpen-line: #e6a29b; --expert-pen: #b07400; --expert-line: #e7c98a;
+  --sheet: #fffefa; --sheet-ink: #1c1c1a; --paper-muted: #6b675d; --paper-rule: #ddd8cc;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #141716; --raise: #1c201f; --panel: #232827; --ink: #e7ebe8; --ink-2: #b4bcb7; --ink-3: #939b96;
+  --line: #2f3633; --accent: #9dbbe8; --on-accent: #111a26;
+  --pass: #6fd29b; --fail: #ff8a7e; --na: #8f9792; --expert: #f2b955;
+  --pass-bg: #1b3327; --fail-bg: #3b211e; --na-bg: #242a28; --expert-bg: #372b16;
+  --redpen-text: #ff8a7e; --redpen-line: #6b2b25; --expert-line: #5c4518; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --paper: #141716; --raise: #1c201f; --panel: #232827; --ink: #e7ebe8; --ink-2: #b4bcb7; --ink-3: #939b96;
+  --line: #2f3633; --accent: #9dbbe8; --on-accent: #111a26;
+  --pass: #6fd29b; --fail: #ff8a7e; --na: #8f9792; --expert: #f2b955;
+  --pass-bg: #1b3327; --fail-bg: #3b211e; --na-bg: #242a28; --expert-bg: #372b16;
+  --redpen-text: #ff8a7e; --redpen-line: #6b2b25; --expert-line: #5c4518; color-scheme: dark; }
+
+@theme inline {
+  --color-paper: var(--paper); --color-raise: var(--raise); --color-surface: var(--raise); --color-panel: var(--panel);
+  --color-ink: var(--ink); --color-ink-2: var(--ink-2); --color-ink-3: var(--ink-3); --color-muted: var(--ink-2);
+  --color-line: var(--line); --color-accent: var(--accent); --color-action: var(--accent); --color-on-action: var(--on-accent);
+  --color-pass: var(--pass); --color-fail: var(--fail); --color-na: var(--na); --color-expert: var(--expert);
+  --color-pass-bg: var(--pass-bg); --color-fail-bg: var(--fail-bg); --color-na-bg: var(--na-bg); --color-expert-bg: var(--expert-bg);
+  --font-sans: "Anuphan", "Noto Sans Thai", system-ui, -apple-system, sans-serif;
+  --font-doc: "Sarabun", "TH Sarabun New", "Noto Serif Thai", serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+@layer base {
+  html, body, #root { min-height: 100%; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-sans); font-size: 15px; line-height: 1.6; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  input, select, button { font: inherit; color: inherit; }
+  .num { font-variant-numeric: tabular-nums; }
+  ::selection { background: color-mix(in oklab, var(--accent) 25%, transparent); }
+}
+
+/* The invoice sheet: light paper in both themes, set in the Thai official-document face. */
+.paper {
+  background: var(--sheet); color: var(--sheet-ink); font-family: var(--font-doc); font-size: 16px; color-scheme: light;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px -12px rgb(0 0 0 / 0.18);
+}
+/* Red pen: a slightly tilted hand-drawn oval that sweeps in when an invoice opens. */
+.pen { transform: rotate(-1.5deg); animation: draw 380ms cubic-bezier(.2,.7,.2,1) 60ms both; }
+@keyframes draw { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+.note:target { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .pen { animation: none; } }
+
+/* Print: only the report. */
+.print-only { display: none; }
+@media print {
+  .screen-only { display: none !important; }
+  .print-only { display: block; color: #000; }
+  body { background: #fff; color: #000; }
+  @page { size: A4; margin: 14mm; }
+  .print-only tr { break-inside: avoid; }
+}
