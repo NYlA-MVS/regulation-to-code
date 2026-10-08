@@ -26,6 +26,8 @@ export interface Context {
   today?: Date
   /** Most common name/address per tax ID across the file (see buildPeers). */
   peers?: Peers
+  /** Every row in the file by invoice number, for cross-references (TI-21). */
+  byNumber?: Map<string, Row[]>
 }
 
 const TITLE = compact('ใบกำกับภาษี')
@@ -44,6 +46,7 @@ const registrant = (row: Row): boolean | null => {
 
 export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
   'TI-01': (row) => {
+    if (docType(row) !== 'INV') return { verdict: 'n/a', evidence: 'ใบเพิ่มหนี้/ใบลดหนี้ ตรวจที่ CN-01' }
     const t = compact(row.doc_title)
     if (t.includes(TITLE)) {
       if (t.includes(ABBREVIATED))
@@ -81,6 +84,7 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     return pass(`เลขที่ "${n}" ไม่ซ้ำ`)
   },
   'TI-05': (row, ctx) => {
+    if (docType(row) !== 'INV') return { verdict: 'n/a', evidence: 'ใบเพิ่มหนี้/ใบลดหนี้ไม่บังคับรายการสินค้า (ม.86/9, 86/10)' }
     const lines = ctx.lines ?? [row]
     for (const [k, line] of lines.entries()) {
       const at = lines.length > 1 ? `รายการที่ ${k + 1}: ` : ''
@@ -101,8 +105,13 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     const vat = parseAmount(row.vat_amount)
     const amt = parseAmount(row.amount_ex_vat)
     if (vat === null || amt === null || amt < 0 || !Number.isFinite(ctx.vatRate)) return { verdict: 'n/a', evidence: 'ตรวจการคำนวณไม่ได้เพราะยอดภาษีหรือมูลค่าไม่ถูกต้อง' }
+    // Zero-rated and exempt lines carry no VAT; only standard-rated value is the base.
+    const lines = ctx.lines ?? [row]
+    const base = lines.length > 1 && lines.some((l) => vatCategory(l) !== 'standard')
+      ? lines.filter((l) => vatCategory(l) === 'standard').reduce((n, l) => n + (parseAmount(l.amount_ex_vat) ?? 0), 0)
+      : vatCategory(row) === 'standard' ? amt : 0
     // ป.86/2542 ข้อ 4(6): round half up at the third decimal.
-    const want = roundHalfUp(amt * ctx.vatRate)
+    const want = roundHalfUp(base * ctx.vatRate)
     // Per-line rounding can drift by up to 1 satang per line item.
     if (Math.abs(vat - want) > 0.01 * (ctx.lines?.length ?? 1) + 1e-9)
       return fail(`ภาษี ${vat.toFixed(2)} บาท แต่ ${amt.toFixed(2)} × ${(ctx.vatRate * 100).toFixed(0)}% = ${want.toFixed(2)} บาท`, 'คำนวณภาษีมูลค่าเพิ่มใหม่')
@@ -179,6 +188,7 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     return checked ? pass('จำนวน × ราคาต่อหน่วย ตรงกับมูลค่า') : { verdict: 'n/a', evidence: 'ไม่มีราคาต่อหน่วยให้ตรวจ' }
   },
   'TI-13': (row, ctx) => {
+    if (vatCategory(row) !== 'standard') return { verdict: 'n/a', evidence: 'รายการอัตรา 0% หรือยกเว้น' }
     const d = parseDate(row.issue_date)
     if (!d) return { verdict: 'n/a', evidence: 'ไม่ทราบวันที่ จึงหาอัตราตามกฎหมายไม่ได้' }
     const law = rateFor(d)
@@ -229,6 +239,80 @@ export const CHECKS: Record<ClauseId, (row: Row, ctx: Context) => Result> = {
     return m[2].split(' ').filter(Boolean).length >= 2
       ? pass('มีชื่อและนามสกุลผู้ซื้อ')
       : warn(`ชื่อผู้ซื้อ ${show(row.buyer_name)} ไม่มีนามสกุล`, 'ผู้ซื้อที่เป็นบุคคลธรรมดาต้องระบุทั้งชื่อและนามสกุล')
+  },
+  'TI-21': (row, ctx) => {
+    if (isCancelled(row)) return pass('ใบนี้ถูกยกเลิก ไม่นับยอดในแบบ ภ.พ.30')
+    const old = norm(row.replaces_invoice_no)
+    if (!old) return { verdict: 'n/a', evidence: 'ไม่ใช่ใบที่ออกแทนใบที่ยกเลิก' }
+    if (old === norm(row.invoice_no)) return { verdict: 'needs_expert', evidence: `ออกแทนโดยใช้เลขที่เดิม "${old}"`, fix: 'ป.86/2542 ข้อ 25 ให้ใช้เลขที่ใหม่ แต่ข้อหารือ กค 0702(กม.05)/1041 ยอมให้ใช้เลขเดิมได้ในบางกรณี ควรให้ผู้เชี่ยวชาญยืนยัน' }
+    const originals = ctx.byNumber?.get(old) ?? []
+    if (!originals.length) return pass(`ออกแทนใบเลขที่ "${old}" (ใบเดิมไม่อยู่ในไฟล์นี้)`)
+    const orig = originals[0]
+    if (!originals.some(isCancelled)) return warn(`ออกแทนใบเลขที่ "${old}" แต่ใบเดิมในไฟล์ยังไม่ได้ระบุว่ายกเลิก`, 'ระบุสถานะ "ยกเลิก" ที่ใบเดิม และหมายเหตุการยกเลิกในรายงานภาษีขายของเดือนที่ออกใบใหม่')
+    const a = parseDate(row.issue_date), b = parseDate(orig.issue_date)
+    if (a && b && a.getTime() !== b.getTime() && !isEtax(row))
+      return warn(`ใบใหม่ลงวันที่ ${thaiDate(a)} แต่ใบเดิมลงวันที่ ${thaiDate(b)}`, 'ใบกระดาษที่ออกแทนต้องลงวันที่ตรงกับใบเดิม (ป.86/2542 ข้อ 25) ยกเว้น e-Tax Invoice ที่ใช้วันที่ใหม่ (ประกาศอธิบดีฯ ฉบับที่ 15 ข้อ 22)')
+    return pass(`ออกแทนใบเลขที่ "${old}" ที่ยกเลิกแล้ว`)
+  },
+  'TI-22': (row) => {
+    const cur = norm(row.currency).toUpperCase()
+    if (!cur || ['THB', 'BAHT', 'บาท', '฿'].includes(cur)) return { verdict: 'n/a', evidence: 'เงินบาท' }
+    const fx = parseAmount(row.exchange_rate)
+    if (fx === null || fx <= 0) return fail(`ใบเป็นสกุล ${cur} แต่ไม่มีอัตราแลกเปลี่ยน`, 'ระบุอัตราแลกเปลี่ยนเป็นเงินบาทในใบกำกับภาษี ตามมาตรา 79/4 (ประกาศอธิบดีฯ ฉบับที่ 39 ข้อ 5)')
+    if (vatCategory(row) === 'zero') return pass(`สกุล ${cur} อัตรา ${fx} บาท (ผู้ส่งออกอัตรา 0% ไม่ต้องขออนุมัติ ตามประกาศฯ ฉบับที่ 92 ข้อ 3)`)
+    return warn(`ใบเป็นสกุล ${cur} อัตรา ${fx} บาท`, 'การออกใบกำกับภาษีเป็นเงินตราต่างประเทศต้องได้รับอนุมัติจากอธิบดี (ประกาศฯ ฉบับที่ 92 ข้อ 4) ตรวจว่ามีหนังสืออนุมัติ')
+  },
+  'TI-23': (row, ctx) => {
+    const lines = ctx.lines ?? [row]
+    const cats = new Set(lines.map(vatCategory))
+    if (cats.size === 1 && cats.has('standard')) return { verdict: 'n/a', evidence: 'รายการอัตราปกติทั้งหมด' }
+    const vat = parseAmount(row.vat_amount) ?? 0
+    if (!cats.has('standard') && vat > 0)
+      return fail(`รายการทั้งหมดเป็นอัตรา 0% หรือยกเว้น แต่มีภาษี ${vat.toFixed(2)} บาท`, 'รายการอัตรา 0% และรายการยกเว้นไม่ต้องเรียกเก็บภาษีมูลค่าเพิ่ม')
+    if (cats.size === 1 && cats.has('exempt'))
+      return warn('ทั้งใบเป็นรายการยกเว้นภาษี', 'การขายที่ได้รับยกเว้น (ม.81) ไม่ต้องออกใบกำกับภาษี ถ้าออก ภาษีที่แสดงต้องเป็นศูนย์และควรระบุว่ายกเว้น')
+    if (cats.has('exempt') && cats.has('standard'))
+      return pass('มีทั้งรายการปกติและรายการยกเว้น ตรวจภาษีจากรายการปกติเท่านั้น (ต้องทำเครื่องหมายแยกในใบ ตาม ป.86/2542 ข้อ 4(5))')
+    return pass('รายการอัตรา 0% ไม่มีภาษี')
+  },
+  'TI-25': (row) => {
+    const d = parseDate(row.issue_date)
+    const del = parseDate(row.delivery_date), paid = parseDate(row.payment_date)
+    if (!d || (!del && !paid)) return { verdict: 'n/a', evidence: 'ไม่มีวันส่งมอบหรือวันรับชำระ' }
+    const events = [del && ['ส่งมอบ', del], paid && ['รับชำระ', paid]].filter(Boolean) as [string, Date][]
+    const [label, first] = events.sort((a, b) => a[1].getTime() - b[1].getTime())[0]
+    if (d.getTime() > first.getTime()) {
+      const sameMonth = monthOf(d) === monthOf(first)
+      return warn(`ออกใบวันที่ ${thaiDate(d)} หลังวัน${label} ${thaiDate(first)}`, `ความรับผิดเกิดเมื่อ${label} ต้องออกใบกำกับภาษีทันที${sameMonth ? '' : ` ภาษีขายนี้เป็นของเดือน ${thaiMonth(monthOf(first))} ไม่ใช่เดือนที่ออกใบ`}`)
+    }
+    return pass(`ออกใบไม่ช้ากว่าวัน${label}`)
+  },
+  'CN-01': (row) => {
+    const t = docType(row)
+    if (t === 'INV') return { verdict: 'n/a', evidence: 'ไม่ใช่ใบเพิ่มหนี้/ใบลดหนี้' }
+    const word = t === 'CN' ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'
+    const title = compact(row.doc_title)
+    if (title.includes(compact(word)) || (t === 'CN' ? /creditnote/i : /debitnote/i).test(title)) return pass(`ชื่อเอกสารมีคำว่า ${word}`)
+    return fail(`เป็น${word} แต่ชื่อเอกสาร ${show(row.doc_title)} ไม่มีคำว่า "${word}"`, `ใส่คำว่า "${word}" ในที่ที่เห็นได้เด่นชัด`)
+  },
+  'CN-02': (row) => {
+    if (docType(row) === 'INV') return { verdict: 'n/a', evidence: 'ไม่ใช่ใบเพิ่มหนี้/ใบลดหนี้' }
+    return isBlank(row.ref_invoice_no) ? fail('ไม่ได้อ้างเลขที่ใบกำกับภาษีเดิม', 'ระบุเลขที่ (และเล่มที่ถ้ามี) ของใบกำกับภาษีเดิม') : pass(`อ้างใบกำกับภาษีเดิมเลขที่ ${show(row.ref_invoice_no)}`)
+  },
+  'CN-03': (row) => {
+    const t = docType(row)
+    if (t === 'INV') return { verdict: 'n/a', evidence: 'ไม่ใช่ใบเพิ่มหนี้/ใบลดหนี้' }
+    const o = parseAmount(row.original_value), c = parseAmount(row.correct_value), diff = parseAmount(row.amount_ex_vat)
+    if (o === null || c === null) return fail('ไม่มีมูลค่าตามใบเดิมหรือมูลค่าที่ถูกต้อง', 'ระบุมูลค่าตามใบกำกับภาษีเดิม มูลค่าที่ถูกต้อง และผลต่าง')
+    if ((t === 'CN' && c >= o) || (t === 'DN' && c <= o))
+      return fail(`${t === 'CN' ? 'ใบลดหนี้' : 'ใบเพิ่มหนี้'} แต่มูลค่าที่ถูกต้อง ${c.toFixed(2)} ${t === 'CN' ? 'ไม่ได้น้อยกว่า' : 'ไม่ได้มากกว่า'}มูลค่าเดิม ${o.toFixed(2)}`, 'ตรวจประเภทเอกสารและมูลค่า')
+    if (diff !== null && Math.abs(Math.abs(o - c) - Math.abs(diff)) > 0.01)
+      return fail(`ผลต่าง ${Math.abs(o - c).toFixed(2)} ไม่ตรงกับมูลค่าในเอกสาร ${Math.abs(diff).toFixed(2)}`, 'มูลค่าก่อน VAT ของใบเพิ่มหนี้/ใบลดหนี้ต้องเท่ากับผลต่างของมูลค่าทั้งสอง')
+    return pass(`มูลค่าเดิม ${o.toFixed(2)} → ${c.toFixed(2)} ผลต่าง ${Math.abs(o - c).toFixed(2)}`)
+  },
+  'CN-04': (row) => {
+    if (docType(row) === 'INV') return { verdict: 'n/a', evidence: 'ไม่ใช่ใบเพิ่มหนี้/ใบลดหนี้' }
+    return isBlank(row.reason) ? fail('ไม่มีเหตุผลการออกเอกสาร', 'ระบุคำอธิบายสั้น ๆ ถึงสาเหตุ เช่น คืนสินค้า ลดราคา') : pass(`เหตุผล: ${show(row.reason)}`)
   },
   'TI-24': (row) => {
     if (!compact(row.doc_title).includes(ABBREVIATED) && !/\babb\b|abbreviated/i.test(norm(row.doc_title)))
@@ -292,4 +376,24 @@ export function buildPeers(rows: Row[]): Peers {
     if (top.count > second) out.set(k, { key, ...top })
   }
   return out
+}
+
+// ---- Document type, status and VAT category (optional columns, with fallbacks) ----
+export type DocType = 'INV' | 'CN' | 'DN'
+export function docType(row: Row): DocType {
+  const t = compact(row.doc_type).toLowerCase()
+  if (/^(cn|creditnote|ใบลดหนี้|ลดหนี้|81)$/.test(t)) return 'CN'
+  if (/^(dn|debitnote|ใบเพิ่มหนี้|เพิ่มหนี้|80)$/.test(t)) return 'DN'
+  const title = compact(row.doc_title).toLowerCase()
+  if (title.includes(compact('ใบลดหนี้')) || title.includes('creditnote')) return 'CN'
+  if (title.includes(compact('ใบเพิ่มหนี้')) || title.includes('debitnote')) return 'DN'
+  return 'INV'
+}
+export const isCancelled = (row: Row) => /^(ยกเลิก|cancel(l?ed)?|void|c)$/i.test(norm(row.status))
+export const isEtax = (row: Row) => /e-?tax|xml|time\s*stamp|อิเล็กทรอนิกส์/i.test(norm(row.channel))
+export function vatCategory(row: Row): 'standard' | 'zero' | 'exempt' {
+  const c = compact(row.vat_category).toLowerCase()
+  if (/^(0|0%|0\.0+%?|zero|zerorated|ส่งออก|export|อัตรา0%?)$/.test(c)) return 'zero'
+  if (/^(exempt|ยกเว้น|e|ex|nonvat)$/.test(c)) return 'exempt'
+  return 'standard'
 }

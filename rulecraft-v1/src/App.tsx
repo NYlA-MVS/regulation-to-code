@@ -12,7 +12,7 @@ import checksSource from './rules/checks.ts?raw'
 import type { Verdict } from './rules/checks'
 import { CLAUSES, PACKS } from './rules/clauses'
 import type { ClauseId } from './rules/clauses'
-import { applyMapping, autoMap, FIELD_LABEL, FIELDS, groupInvoices, runInvoices, summary } from './rules/engine'
+import { applyMapping, autoMap, EXTRA_FIELDS, FIELD_LABEL, FIELDS, groupInvoices, runInvoices, summary } from './rules/engine'
 import type { Field } from './rules/engine'
 import factoryCsv from './samples/factory.csv?raw'
 
@@ -28,7 +28,8 @@ const V: Record<Verdict, { label: string; short: string; cls: string }> = {
 const STATUS: Record<string, string> = { checkable: 'ตรวจด้วยข้อมูลได้', partial: 'ตรวจได้บางส่วน', needs_expert: 'บางกรณีต้องให้ผู้เชี่ยวชาญยืนยัน' }
 /** Fields an invoice cannot be checked without. Others fall back to n/a or fail visibly. */
 const KEY_FIELDS: Field[] = ['invoice_no', 'issue_date', 'seller_tax_id', 'buyer_name', 'amount_ex_vat', 'vat_amount']
-const OPTIONAL: Field[] = ['book_no', 'unit_price', 'total']
+const OPTIONAL: Field[] = ['book_no', 'unit_price', 'total', ...EXTRA_FIELDS]
+const CORE_FIELDS = FIELDS.filter((f) => !EXTRA_FIELDS.includes(f))
 
 /** The source of one clause's check, cut from checks.ts for display. */
 function codeFor(id: ClauseId): string {
@@ -124,6 +125,8 @@ export default function App() {
   const sum = useMemo(() => summary(results), [results])
   const probs = useMemo(() => problems(results), [results])
   const activeClauses = CLAUSES.filter((c) => (PACKS[PACK].clauses as readonly string[]).includes(c.id))
+  // The overview table shows only clauses that apply to at least one invoice in this file.
+  const shownClauses = activeClauses.filter((c) => results.some((r) => r[c.id] && r[c.id]!.verdict !== 'n/a'))
   const unmappedKey = KEY_FIELDS.filter((f) => !mapping[f])
   const unmappedOther = FIELDS.filter((f) => !mapping[f] && !KEY_FIELDS.includes(f) && !OPTIONAL.includes(f))
   const passCount = sum.rows - results.filter(hasProblem).length
@@ -269,7 +272,7 @@ export default function App() {
             <p className="rounded-lg bg-expert-bg px-3 py-2 text-[0.875rem] text-expert">ไม่มีในไฟล์ {unmappedOther.length} ช่อง: {unmappedOther.map((f) => FIELD_LABEL[f]).join(', ')} ข้อที่ใช้ช่องเหล่านี้จะได้ผล “ต้องแก้” หรือ “ไม่เกี่ยว” ไม่มีทางผ่านเงียบๆ</p>
           )}
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {FIELDS.map((f) => (
+            {CORE_FIELDS.map((f) => (
               <label key={f} className="grid min-w-0 gap-1 rounded-lg border border-line bg-raise p-3">
                 <span className="flex items-baseline justify-between gap-2 text-[0.8125rem] font-semibold">
                   {FIELD_LABEL[f]}
@@ -283,6 +286,20 @@ export default function App() {
               </label>
             ))}
           </div>
+          <details open={EXTRA_FIELDS.some((f) => mapping[f])} className="rounded-xl border border-line bg-raise p-4">
+            <summary className="cursor-pointer font-semibold">ช่องเพิ่มเติม (ไม่บังคับ) <span className="font-normal text-ink-3">ใบเพิ่มหนี้/ใบลดหนี้ ใบที่ยกเลิก สกุลเงินต่างประเทศ อัตรา 0%/ยกเว้น วันส่งมอบ/รับชำระ</span></summary>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {EXTRA_FIELDS.map((f) => (
+                <label key={f} className="grid min-w-0 gap-1 rounded-lg border border-line bg-paper p-3">
+                  <span className="text-[0.8125rem] font-semibold">{FIELD_LABEL[f]}</span>
+                  <select id={`map-${f}`} value={mapping[f]} onChange={(e) => setMappingEdits({ ...mappingEdits, [f]: e.target.value })} className="h-9 min-w-0 rounded-lg border border-line bg-raise px-2 text-[0.875rem]">
+                    <option value="">ไม่มีในไฟล์</option>
+                    {table.headers.map((h) => (<option key={h} value={h}>{h}</option>))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          </details>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={toResults} className={btnPrimary}>ตรวจ {invoices.length} ใบ</button>
             <button type="button" onClick={() => setStep('upload')} className={btnGhost}>เลือกไฟล์อื่น</button>
@@ -348,7 +365,7 @@ export default function App() {
                       <thead>
                         <tr className="border-b border-line text-left">
                           <th className="sticky left-0 bg-raise p-2 font-semibold">ใบที่ / เลขที่</th>
-                          {activeClauses.map((c) => (<th key={c.id} className="num p-2 text-center font-semibold" title={c.plain}>{c.id.replace('TI-', '')}</th>))}
+                          {shownClauses.map((c) => (<th key={c.id} className="num p-2 text-center font-semibold" title={c.plain}>{c.id.replace('TI-', '')}</th>))}
                         </tr>
                       </thead>
                       <tbody>
@@ -359,7 +376,7 @@ export default function App() {
                                 <span className="text-ink-3">{i + 1}</span> {invoices[i].row.invoice_no || <em className="text-ink-3">(ไม่มีเลขที่)</em>}
                               </button>
                             </th>
-                            {activeClauses.map((c) => {
+                            {shownClauses.map((c) => {
                               const res = r[c.id]
                               const on = cell?.inv === i && cell.clause === c.id
                               return (
@@ -406,6 +423,8 @@ export default function App() {
               </div>
             )}
           </div>
+
+          <ManualChecklist fileName={source.name} />
 
           <PrintReport filing={filing} taxMonth={taxMonth} name={source.name} vatPct={vatPct} total={sum.rows} pass={passCount} fail={sum.rowsWithFail} expert={sum.rowsNeedExpert}
             items={probs.map((p) => ({ ...p, no: invoices[p.invoice].row.invoice_no, lines: lineRange(invoices[p.invoice].lineNos) }))} />
@@ -474,7 +493,8 @@ function Help() {
         <ul className="grid list-disc gap-2 pl-5 text-ink-2">
           <li>ตรวจว่ารายการที่กฎหมายกำหนดมีครบและถูกรูปแบบ เช่น เลขผู้เสียภาษี 13 หลักพร้อมเลขตรวจสอบ วันที่ที่มีอยู่จริง เลขที่ไม่ซ้ำ ยอดภาษีตรงกับอัตรา และสาขาตามประกาศฉบับที่ 199</li>
           <li>ไม่ได้ตรวจว่าเลขผู้เสียภาษีจดทะเบียน VAT จริง ให้ค้นในระบบของกรมสรรพากรเพิ่มเติม</li>
-          <li>ยังไม่รองรับใบลดหนี้ ใบเพิ่มหนี้ ใบกำกับภาษีอย่างย่อ ใบกำกับภาษีอิเล็กทรอนิกส์ (e-Tax Invoice XML) และการขายอัตราภาษี 0% เช่นการส่งออก</li>
+          <li>ใบเพิ่มหนี้ ใบลดหนี้ ใบที่ยกเลิกและออกแทน เงินตราต่างประเทศ รายการอัตรา 0% และรายการยกเว้น ตรวจได้เมื่อไฟล์มีคอลัมน์เพิ่มเติม เช่น ประเภทเอกสาร (CN/DN) สถานะ (ยกเลิก) อ้างอิงใบกำกับเดิม มูลค่าเดิม มูลค่าที่ถูกต้อง เหตุผล สกุลเงิน อัตราแลกเปลี่ยน ประเภทภาษี วันส่งมอบ วันรับชำระ ถ้าไม่มี ระบบจะเดาประเภทเอกสารจากชื่อเอกสาร</li>
+          <li>ยังไม่รองรับไฟล์ e-Tax Invoice แบบ XML และใบกำกับภาษีอย่างย่อจากเครื่อง POS (ตรวจได้เพียงว่าไม่ได้ออกให้ผู้ซื้อที่จด VAT)</li>
           <li>ตรวจจากข้อมูลในไฟล์ ไม่ได้ตรวจหน้าตาเอกสารจริง เช่น คำว่า “ใบกำกับภาษี” เห็นเด่นชัดหรือไม่</li>
           <li>ข้อที่ตีความได้หลายทางจะขึ้น “ถามผู้เชี่ยวชาญ” แทนการเดา</li>
         </ul>
@@ -550,7 +570,7 @@ function Filing({ rows, taxMonth, print = false }: { rows: FilingRow[]; taxMonth
                   {sellers > 1 && <td className="num p-2">{r.sellerTin || '(ไม่มีเลข)'}</td>}
                   <td className="p-2">{branchLabel(r.branch)}</td>
                   <td className={`p-2 whitespace-nowrap ${other ? 'text-expert' : ''}`}>{r.month ? thaiMonth(r.month) : '(อ่านวันที่ไม่ได้)'}{other ? ' · นอกเดือนที่ยื่น' : ''}</td>
-                  <td className="num p-2 text-right">{r.invoices}</td>
+                  <td className="num p-2 text-right">{r.invoices}{r.notes ? ` (ลด/เพิ่มหนี้ ${r.notes})` : ''}{r.cancelled ? ` · ยกเลิก ${r.cancelled} ไม่นับยอด` : ''}</td>
                   <td className="num p-2 text-right">{baht(r.amount)}</td>
                   <td className="num p-2 text-right">{baht(r.vat)}</td>
                   <td className={`num p-2 text-right ${r.failing ? 'text-fail' : ''}`}>{r.failing}{r.unreadable ? ` · ${r.unreadable} ใบอ่านยอดไม่ได้` : ''}</td>
@@ -560,7 +580,58 @@ function Filing({ rows, taxMonth, print = false }: { rows: FilingRow[]; taxMonth
           </tbody>
         </table>
       </div>
-      <p className="text-[0.75rem] text-ink-3">ยอดจากไฟล์นี้เท่านั้น ยังไม่รวมใบเพิ่มหนี้ ใบลดหนี้ และยอดขายที่ออกใบกำกับภาษีอย่างย่อ ยื่นแยกรายสถานประกอบการ เว้นแต่ได้รับอนุมัติให้ยื่นรวม (ม.83 วรรคสี่) กำหนดยื่นออนไลน์ +8 วันตามประกาศกระทรวงการคลังที่ใช้กับแบบที่ครบกำหนดถึง 31 ม.ค. 2570</p>
+      <p className="text-[0.75rem] text-ink-3">ยอดจากไฟล์นี้เท่านั้น ใบลดหนี้หักออก ใบเพิ่มหนี้บวกเพิ่ม ใบที่ยกเลิกไม่นับ ยังไม่รวมยอดขายที่ออกใบกำกับภาษีอย่างย่อ ยื่นแยกรายสถานประกอบการ เว้นแต่ได้รับอนุมัติให้ยื่นรวม (ม.83 วรรคสี่) กำหนดยื่นออนไลน์ +8 วันตามประกาศกระทรวงการคลังที่ใช้กับแบบที่ครบกำหนดถึง 31 ม.ค. 2570</p>
     </section>
+  )
+}
+
+// Things the file cannot show but that decide whether the customer can claim the VAT
+// (ประกาศอธิบดีฯ ฉบับที่ 42 ข้อ 2, ป.86/2542, ป.46/2537, ประกาศอธิบดีฯ ฉบับที่ 15 และ 247).
+const MANUAL = [
+  ['คำว่า "ใบกำกับภาษี" ตีพิมพ์ไว้ หรือพิมพ์จากคอมพิวเตอร์ทั้งฉบับ ไม่ใช่ประทับตรายางหรือเขียนเอง', 'ประกาศฯ 42 ข้อ 2(5)'],
+  ['ชื่อ ที่อยู่ และเลขผู้เสียภาษีของผู้ขาย ตีพิมพ์ไว้ หรือพิมพ์จากคอมพิวเตอร์ทั้งฉบับ', 'ประกาศฯ 42 ข้อ 2(12)'],
+  ['ต้นฉบับไม่ใช่สำเนาคาร์บอน ถ้าออกเป็นชุดต้องมีข้อความ "เอกสารออกเป็นชุด"', 'ประกาศฯ 42 ข้อ 2(7)'],
+  ['ไม่มีการแก้ไขด้วยมือ ยกเว้นที่อยู่หรือเลขผู้เสียภาษีที่ทางราชการเปลี่ยน ภายใน 1 ปี พร้อมลายมือชื่อ', 'ประกาศฯ 42 ข้อ 2(10), ป.46/2537'],
+  ['ใบหลายแผ่น: ทุกแผ่นมีรายการครบ มี "แผ่นที่" และยอดรวมอยู่แผ่นสุดท้ายเท่านั้น', 'ป.86/2542 ข้อ 9'],
+  ['สินค้าที่ได้รับยกเว้น VAT ในใบเดียวกัน ทำเครื่องหมายแยกให้เห็นชัด', 'ป.86/2542 ข้อ 4(5)'],
+  ['ใบที่ยกเลิก: เรียกคืนต้นฉบับ ประทับ "ยกเลิก" เก็บรวมกับสำเนา และหมายเหตุในรายงานภาษีขาย', 'ป.86/2542 ข้อ 25'],
+  ['ใบที่ส่งเป็น e-Tax Invoice แล้วพิมพ์เป็นกระดาษ มีข้อความ "เอกสารนี้ได้จัดทำและส่งข้อมูลให้แก่กรมสรรพากรด้วยวิธีการทางอิเล็กทรอนิกส์"', 'ประกาศฯ 15, ฉบับที่ 247'],
+  ['เลขผู้เสียภาษีของผู้ขายและผู้ซื้อจดทะเบียน VAT จริง (ตรวจในระบบของกรมสรรพากร โปรแกรมนี้ตรวจได้แค่รูปแบบเลข)', 'ม.82/5'],
+] as const
+
+function ManualChecklist({ fileName }: { fileName: string }) {
+  const key = `rulecraft.manual.v1:${fileName}`
+  const [done, setDone] = useState<boolean[]>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(key) ?? '[]')
+      return Array.isArray(v) ? v : []
+    } catch {
+      return []
+    }
+  })
+  const toggle = (i: number) => {
+    const next = MANUAL.map((_, k) => (k === i ? !done[k] : !!done[k]))
+    setDone(next)
+    try {
+      localStorage.setItem(key, JSON.stringify(next))
+    } catch {
+      /* not remembered */
+    }
+  }
+  const count = MANUAL.filter((_, i) => done[i]).length
+  return (
+    <details className="screen-only rounded-xl border border-line bg-raise p-4">
+      <summary className="cursor-pointer font-semibold">ตรวจด้วยตาก่อนส่งใบ <span className="num font-normal text-ink-3">{count}/{MANUAL.length}</span> <span className="font-normal text-ink-3">เรื่องที่ไฟล์บอกไม่ได้ แต่ทำให้ลูกค้าใช้ภาษีซื้อไม่ได้</span></summary>
+      <ul className="mt-3 grid gap-2">
+        {MANUAL.map(([text, src], i) => (
+          <li key={i}>
+            <label className="flex items-start gap-2 text-[0.9375rem]">
+              <input type="checkbox" className="mt-1.5" checked={!!done[i]} onChange={() => toggle(i)} />
+              <span>{text} <span className="text-[0.8125rem] text-ink-3">· {src}</span></span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </details>
   )
 }

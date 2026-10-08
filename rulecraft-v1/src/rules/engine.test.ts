@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import Papa from 'papaparse'
 import { describe, expect, it } from 'vitest'
-import { applyMapping, autoMap, compareExpected, mutationTest, runPack } from './engine'
+import { applyMapping, autoMap, compareExpected, EXTRA_FIELDS, mutationTest, runPack } from './engine'
+import type { Field } from './engine'
 import { parseDate, taxIdProblem, isBranchNotation } from './validators'
 import { compact } from './normalize'
 
@@ -17,7 +18,7 @@ describe.each(['shop-a', 'shop-b', 'evasion'])('%s', (name) => {
 
   it('maps every column automatically', () => {
     const m = autoMap(raw.meta.fields ?? [])
-    expect(Object.values(m).filter((v) => !v)).toEqual([])
+    expect(Object.entries(m).filter(([f, v]) => !v && !EXTRA_FIELDS.includes(f as Field)).map(([f]) => f)).toEqual([])
   })
   it('agrees with every expected label', () => {
     const cmp = compareExpected(results, expected)

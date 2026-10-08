@@ -1,5 +1,5 @@
 // Runs a rule pack over rows, maps columns, compares with expected labels, and mutation-tests the checks.
-import { buildPeers, CHECKS, invoiceKey } from './checks'
+import { buildPeers, CHECKS, invoiceKey, isCancelled } from './checks'
 import type { Result, Row, Verdict } from './checks'
 import { CLAUSES, PACKS } from './clauses'
 import type { ClauseId, PackId } from './clauses'
@@ -9,7 +9,11 @@ export const FIELDS = [
   'invoice_no', 'book_no', 'issue_date', 'doc_title', 'seller_name', 'seller_address', 'seller_tax_id', 'seller_branch',
   'buyer_name', 'buyer_address', 'buyer_tax_id', 'buyer_branch', 'buyer_is_vat_registrant', 'item_desc', 'qty', 'unit_price',
   'amount_ex_vat', 'vat_amount', 'total',
+  // Optional fields for credit/debit notes, cancellations, currency, VAT category and tax point.
+  'doc_type', 'status', 'replaces_invoice_no', 'ref_invoice_no', 'original_value', 'correct_value', 'reason',
+  'currency', 'exchange_rate', 'vat_category', 'channel', 'delivery_date', 'payment_date',
 ] as const
+export const EXTRA_FIELDS: readonly Field[] = FIELDS.slice(FIELDS.indexOf('doc_type'))
 export type Field = (typeof FIELDS)[number]
 
 export const FIELD_LABEL: Record<Field, string> = {
@@ -18,6 +22,9 @@ export const FIELD_LABEL: Record<Field, string> = {
   buyer_name: 'ชื่อผู้ซื้อ', buyer_address: 'ที่อยู่ผู้ซื้อ', buyer_tax_id: 'เลขผู้เสียภาษีผู้ซื้อ', buyer_branch: 'สาขาผู้ซื้อ',
   buyer_is_vat_registrant: 'ผู้ซื้อจด VAT', item_desc: 'รายการสินค้า', qty: 'จำนวน', unit_price: 'ราคาต่อหน่วย',
   amount_ex_vat: 'มูลค่าก่อน VAT', vat_amount: 'ภาษีมูลค่าเพิ่ม', total: 'รวมทั้งสิ้น',
+  doc_type: 'ประเภทเอกสาร', status: 'สถานะ (ยกเลิก)', replaces_invoice_no: 'ออกแทนใบเลขที่', ref_invoice_no: 'อ้างอิงใบกำกับเดิม',
+  original_value: 'มูลค่าตามใบเดิม', correct_value: 'มูลค่าที่ถูกต้อง', reason: 'เหตุผล', currency: 'สกุลเงิน', exchange_rate: 'อัตราแลกเปลี่ยน',
+  vat_category: 'ประเภทภาษี (ปกติ/0%/ยกเว้น)', channel: 'ช่องทาง (กระดาษ/e-Tax)', delivery_date: 'วันส่งมอบ', payment_date: 'วันรับชำระ',
 }
 
 // Header names we recognise for each field (English keys plus common Thai headers).
@@ -41,6 +48,19 @@ const SYNONYMS: Record<Field, string[]> = {
   amount_ex_vat: ['มูลค่าก่อน vat', 'มูลค่า', 'amount', 'subtotal'],
   vat_amount: ['ภาษีมูลค่าเพิ่ม', 'vat', 'vat amount'],
   total: ['รวมทั้งสิ้น', 'รวม', 'total', 'grand total'],
+  doc_type: ['ประเภทเอกสาร', 'ประเภท', 'document type', 'type'],
+  status: ['สถานะ', 'status', 'ยกเลิก'],
+  replaces_invoice_no: ['ออกแทนใบเลขที่', 'แทนฉบับเลขที่', 'ใบเดิมที่ยกเลิก', 'replaces', 'replacement for'],
+  ref_invoice_no: ['อ้างอิงใบกำกับเดิม', 'ใบกำกับภาษีเดิม', 'เลขที่ใบกำกับเดิม', 'อ้างอิง', 'reference invoice', 'original invoice'],
+  original_value: ['มูลค่าตามใบเดิม', 'มูลค่าเดิม', 'original value', 'original amount'],
+  correct_value: ['มูลค่าที่ถูกต้อง', 'correct value', 'correct amount'],
+  reason: ['เหตุผล', 'สาเหตุ', 'reason'],
+  currency: ['สกุลเงิน', 'currency'],
+  exchange_rate: ['อัตราแลกเปลี่ยน', 'exchange rate', 'fx rate'],
+  vat_category: ['ประเภทภาษี', 'vat category', 'vat type', 'tax category'],
+  channel: ['ช่องทาง', 'channel'],
+  delivery_date: ['วันส่งมอบ', 'วันที่ส่งของ', 'delivery date'],
+  payment_date: ['วันรับชำระ', 'วันที่รับเงิน', 'payment date'],
 }
 
 const key = (s: string) => norm(s).toLowerCase().replace(/[\s_]+/g, ' ')
@@ -74,10 +94,20 @@ export interface RunOptions {
 export function runPack(rows: Row[], pack: PackId, vatRate: number, lines?: Row[][], opts: RunOptions = {}): RowResults[] {
   const ids = PACKS[pack].clauses as readonly ClauseId[]
   const seen = new Set<string>()
-  const peers = buildPeers(rows)
+  const peers = buildPeers(rows.filter((r) => !isCancelled(r)))
+  const byNumber = new Map<string, Row[]>()
+  for (const r of rows) {
+    const n = norm(r.invoice_no)
+    if (n) byNumber.set(n, [...(byNumber.get(n) ?? []), r])
+  }
   return rows.map((row, i) => {
     const res: RowResults = {}
-    for (const id of ids) res[id] = CHECKS[id](row, { vatRate, seen, lines: lines?.[i], peers, ...opts })
+    // A cancelled invoice keeps its number (TI-04) and its cancellation trail (TI-21); nothing else applies.
+    const cancelled = isCancelled(row)
+    for (const id of ids)
+      res[id] = cancelled && id !== 'TI-04' && id !== 'TI-21'
+        ? { verdict: 'n/a', evidence: 'ใบที่ยกเลิกแล้ว' }
+        : CHECKS[id](row, { vatRate, seen, lines: lines?.[i], peers, byNumber, ...opts })
     if (norm(row.invoice_no)) seen.add(invoiceKey(row))
     return res
   })
@@ -117,7 +147,8 @@ export function compareExpected(results: RowResults[], expected: Record<string, 
 }
 
 // Mutation testing: break one key field of a passing row; the check must turn to fail.
-type Mutant = Row | { row: Row; lines?: Row[]; peers?: ReturnType<typeof buildPeers> }
+type Wrapped = { row: Row; lines?: Row[]; peers?: ReturnType<typeof buildPeers>; byNumber?: Map<string, Row[]> }
+type Mutant = Row | Wrapped
 const MUTATORS: Record<ClauseId, (r: Row) => Mutant> = {
   'TI-01': (r) => ({ ...r, doc_title: 'ใบเสร็จรับเงิน' }),
   'TI-02': (r) => ({ ...r, seller_tax_id: r.seller_tax_id.slice(0, -1) + String((Number(r.seller_tax_id.slice(-1)) + 1) % 10) }),
@@ -139,9 +170,17 @@ const MUTATORS: Record<ClauseId, (r: Row) => Mutant> = {
   'TI-16': (r) => ({ row: { ...r, seller_name: `${r.seller_name} สาขาใหม่` }, peers: buildPeers([r, r]) }),
   'TI-17': (r) => ({ ...r, buyer_name: `บจก. ${r.buyer_name}` }),
   'TI-18': (r) => ({ ...r, buyer_name: 'นายสมชาย' }),
+  'TI-21': (r) => ({ row: { ...r, invoice_no: `${r.invoice_no}-R`, replaces_invoice_no: r.invoice_no }, byNumber: new Map([[norm(r.invoice_no), [r]]]) }),
+  'TI-22': (r) => ({ ...r, currency: 'USD', exchange_rate: '' }),
+  'TI-23': (r) => ({ ...r, vat_category: 'zero' }),
+  'TI-25': (r) => ({ ...r, delivery_date: '2000-01-01' }),
+  'CN-01': (r) => ({ ...r, doc_type: 'CN', doc_title: 'ใบกำกับภาษี' }),
+  'CN-02': (r) => ({ ...r, doc_type: 'CN', doc_title: 'ใบลดหนี้', ref_invoice_no: '' }),
+  'CN-03': (r) => ({ ...r, doc_type: 'CN', doc_title: 'ใบลดหนี้', original_value: '', correct_value: '' }),
+  'CN-04': (r) => ({ ...r, doc_type: 'CN', doc_title: 'ใบลดหนี้', reason: '' }),
 }
 
-const isWrapped = (m: Mutant): m is { row: Row; lines?: Row[]; peers?: ReturnType<typeof buildPeers> } => typeof m.row === 'object'
+const isWrapped = (m: Mutant): m is Wrapped => typeof m.row === 'object'
 
 export function mutationTest(rows: Row[], vatRate: number, opts: RunOptions = {}) {
   const peers = buildPeers(rows)
@@ -151,7 +190,7 @@ export function mutationTest(rows: Row[], vatRate: number, opts: RunOptions = {}
     if (idx < 0) return { clause: c, row: null as number | null, killed: false, after: null as Result | null }
     const m = MUTATORS[c.id](rows[idx])
     const after = isWrapped(m)
-      ? CHECKS[c.id](m.row, { vatRate, seen: new Set(), lines: m.lines, peers: m.peers ?? peers, ...opts })
+      ? CHECKS[c.id](m.row, { vatRate, seen: new Set(), lines: m.lines, peers: m.peers ?? peers, byNumber: m.byNumber, ...opts })
       : CHECKS[c.id](m, { vatRate, seen: new Set(), peers, ...opts })
     return { clause: c, row: idx + 1, killed: after.verdict === 'fail' || after.verdict === 'warn', after }
   })

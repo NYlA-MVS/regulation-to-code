@@ -73,9 +73,9 @@ describe('F-01 filing summary', () => {
   it('defaults the tax month to the most common invoice month', () => expect(likelyTaxMonth(inv)).toBe('2026-09'))
   it('groups by premises and month, sums value and VAT, counts failing invoices', () => {
     expect(filingSummary(inv, res)).toEqual([
-      { sellerTin: '0105558123451', branch: '00000', month: '2026-08', invoices: 1, amount: 100, vat: 7, failing: 1, unreadable: 0 },
-      { sellerTin: '0105558123451', branch: '00000', month: '2026-09', invoices: 1, amount: 150, vat: 10.5, failing: 0, unreadable: 0 },
-      { sellerTin: '0105558123451', branch: '00002', month: '2026-09', invoices: 1, amount: 200, vat: 14, failing: 0, unreadable: 0 },
+      { sellerTin: '0105558123451', branch: '00000', month: '2026-08', invoices: 1, amount: 100, vat: 7, failing: 1, unreadable: 0, cancelled: 0, notes: 0 },
+      { sellerTin: '0105558123451', branch: '00000', month: '2026-09', invoices: 1, amount: 150, vat: 10.5, failing: 0, unreadable: 0, cancelled: 0, notes: 0 },
+      { sellerTin: '0105558123451', branch: '00002', month: '2026-09', invoices: 1, amount: 200, vat: 14, failing: 0, unreadable: 0, cancelled: 0, notes: 0 },
     ])
   })
 })

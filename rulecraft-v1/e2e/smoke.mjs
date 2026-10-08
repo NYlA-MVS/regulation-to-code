@@ -86,6 +86,29 @@ ok(await seen(page.getByText('ควรตรวจสอบ', { exact: true }).
 await page.screenshot({ path: `${OUT}/8-warn.png`, fullPage: true })
 await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
 
+// P3: credit note, cancelled invoice and its replacement, through the optional columns
+const p3 = [
+  'เลขที่ใบกำกับ,วันที่,ชื่อเอกสาร,ชื่อผู้ขาย,ที่อยู่ผู้ขาย,เลขผู้เสียภาษีผู้ขาย,สาขาผู้ขาย,ชื่อลูกค้า,ที่อยู่ลูกค้า,เลขผู้เสียภาษีลูกค้า,สาขาลูกค้า,ลูกค้าจด VAT,รายการ,จำนวน,มูลค่าก่อน VAT,ภาษีมูลค่าเพิ่ม,รวมทั้งสิ้น,สถานะ,ออกแทนใบเลขที่,อ้างอิงใบกำกับเดิม,มูลค่าเดิม,มูลค่าที่ถูกต้อง,เหตุผล',
+  'P-1,03/09/2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,น็อต,10,1000.00,70.00,1070.00,ยกเลิก,,,,,',
+  'P-2,03/09/2569,ใบกำกับภาษี,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,น็อต,10,1000.00,70.00,1070.00,,P-1,,,,',
+  'CN-1,10/09/2569,ใบลดหนี้,บริษัท ก จำกัด,1 ถ.หนึ่ง,0105558123451,สำนักงานใหญ่,บริษัท ข จำกัด,2 ถ.สอง,0105547003211,สำนักงานใหญ่,Y,,,200.00,14.00,214.00,,,P-2,1000.00,800.00,คืนสินค้า 2 ชิ้น',
+].join('\n')
+await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
+await page.locator('#file').setInputFiles({ name: 'p3.csv', mimeType: 'text/csv', buffer: Buffer.from(p3) })
+ok((await page.locator('#map-ref_invoice_no').inputValue()) === 'อ้างอิงใบกำกับเดิม', 'P3: optional columns auto-mapped')
+await page.getByRole('button', { name: 'ตรวจ 3 ใบ' }).click()
+const p3stats = await page.locator('.num.text-\\[1\\.75rem\\]').allInnerTexts()
+ok(JSON.stringify(p3stats) === JSON.stringify(['3', '3', '0', '0']), `P3: cancelled, replacement and credit note all pass (${p3stats})`)
+ok(await seen(page.locator('section.screen-only').getByText('800.00')), 'P3: filing nets the credit note (1,000 − 200 = 800)')
+ok(await seen(page.locator('section.screen-only').getByText(/ยกเลิก 1 ไม่นับยอด/)), 'P3: cancelled listed, not summed')
+await page.getByRole('button', { name: 'ใบที่ 1 ผ่าน' }).click()
+ok(await seen(page.locator('article').getByText('ยกเลิก', { exact: true })), 'P3: cancelled stamp on the paper')
+await page.getByText('ตรวจด้วยตาก่อนส่งใบ').click()
+await page.getByLabel(/ตีพิมพ์ไว้ หรือพิมพ์จากคอมพิวเตอร์ทั้งฉบับ ไม่ใช่/).check()
+ok(await seen(page.getByText('1/9')), 'P3: manual checklist counts ticks')
+await page.screenshot({ path: `${OUT}/9-p3.png`, fullPage: true })
+await page.getByRole('button', { name: '1 · เลือกไฟล์' }).click()
+
 // Mapping remembered for the same header layout
 await page.getByRole('button', { name: 'ลองด้วยไฟล์ตัวอย่าง' }).click()
 await page.locator('#map-total').selectOption('')

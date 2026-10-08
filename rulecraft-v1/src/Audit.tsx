@@ -6,6 +6,7 @@ import type { Verdict } from './rules/checks'
 import { CLAUSES } from './rules/clauses'
 import type { Clause } from './rules/clauses'
 import type { Invoice, RowResults } from './rules/engine'
+import { docType, isCancelled } from './rules/checks'
 import { lineRange } from './io/report'
 import { norm, parseAmount } from './rules/normalize'
 
@@ -16,7 +17,7 @@ const isProblem = (r: RowResults) => Object.values(r).some((x) => x && PROBLEM.i
 
 /** Numbered marks for this invoice, in the order fields appear on the document. */
 function marksFor(res: RowResults): Mark[] {
-  const order = ['TI-01', 'TI-24', 'TI-04', 'TI-15', 'TI-07', 'TI-14', 'TI-02', 'TI-08', 'TI-03', 'TI-17', 'TI-18', 'TI-16', 'TI-09', 'TI-10', 'TI-05', 'TI-12', 'TI-06', 'TI-06b', 'TI-13', 'TI-11']
+  const order = ['TI-01', 'CN-01', 'TI-24', 'TI-21', 'CN-02', 'CN-03', 'CN-04', 'TI-22', 'TI-23', 'TI-25', 'TI-04', 'TI-15', 'TI-07', 'TI-14', 'TI-02', 'TI-08', 'TI-03', 'TI-17', 'TI-18', 'TI-16', 'TI-09', 'TI-10', 'TI-05', 'TI-12', 'TI-06', 'TI-06b', 'TI-13', 'TI-11']
   const out: Mark[] = []
   for (const id of order) {
     const r = res[id as keyof RowResults]
@@ -166,6 +167,25 @@ export function Audit({
             </dl>
           </header>
 
+          {isCancelled(row) && (
+            <p className="justify-self-start rounded border-2 border-[var(--redpen)] px-3 py-1 text-[1.25rem] font-bold tracking-[0.2em] text-[var(--redpen)]">ยกเลิก</p>
+          )}
+          {(docType(row) !== 'INV' || row.replaces_invoice_no || row.currency || row.delivery_date || row.payment_date) && (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[0.9375rem]">
+              {docType(row) !== 'INV' && <>
+                <dt className="text-[var(--paper-muted)]">อ้างอิงใบกำกับภาษีเดิม</dt>
+                <dd><Field field="ref_invoice_no" marks={marks}><span className="num">{blank(row.ref_invoice_no)}</span></Field></dd>
+                <dt className="text-[var(--paper-muted)]">มูลค่าเดิม → ที่ถูกต้อง</dt>
+                <dd className="num"><Field field={['original_value', 'correct_value']} marks={marks}>{money(row.original_value)} → {money(row.correct_value)}</Field></dd>
+                <dt className="text-[var(--paper-muted)]">เหตุผล</dt>
+                <dd><Field field="reason" marks={marks}>{blank(row.reason)}</Field></dd>
+              </>}
+              {row.replaces_invoice_no && <><dt className="text-[var(--paper-muted)]">ออกแทนใบเลขที่</dt><dd><Field field="replaces_invoice_no" marks={marks}><span className="num">{row.replaces_invoice_no}</span></Field></dd></>}
+              {row.currency && <><dt className="text-[var(--paper-muted)]">สกุลเงิน / อัตราแลกเปลี่ยน</dt><dd className="num"><Field field={['currency', 'exchange_rate']} marks={marks}>{row.currency} · {blank(row.exchange_rate)}</Field></dd></>}
+              {(row.delivery_date || row.payment_date) && <><dt className="text-[var(--paper-muted)]">ส่งมอบ / รับชำระ</dt><dd className="num"><Field field={['delivery_date', 'payment_date']} marks={marks}>{row.delivery_date || '–'} / {row.payment_date || '–'}</Field></dd></>}
+            </dl>
+          )}
+
           <div className="grid gap-5 border-y border-[var(--paper-rule)] py-4 sm:grid-cols-2">
             <section className="grid content-start gap-1">
               <h4 className="text-[0.75rem] font-semibold tracking-[0.04em] text-[var(--paper-muted)]">ผู้ขาย</h4>
@@ -242,8 +262,17 @@ export function Audit({
         <aside aria-label="หมายเหตุจากการตรวจ" className="grid content-start gap-3 lg:sticky lg:top-4" aria-live="polite">
           {marks.length === 0 ? (
             <div className="grid gap-1 rounded-lg border border-line bg-surface p-4">
-              <span className="font-semibold text-pass">ใบนี้ผ่านทุกข้อในชุดกฎนี้</span>
-              <span className="text-[0.875rem] text-muted">ไม่มีจุดที่ต้องแก้ ข้อที่ไม่เกี่ยวกับใบนี้ (เช่น ผู้ซื้อไม่ได้จด VAT) ถูกข้ามไป</span>
+              {isCancelled(row) ? (
+                <>
+                  <span className="font-semibold">ใบนี้ถูกยกเลิก</span>
+                  <span className="text-[0.875rem] text-muted">ไม่นับยอดใน ภ.พ.30 เก็บต้นฉบับที่ประทับ "ยกเลิก" ไว้กับสำเนา และหมายเหตุในรายงานภาษีขาย (ป.86/2542 ข้อ 25)</span>
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold text-pass">ใบนี้ผ่านทุกข้อในชุดกฎนี้</span>
+                  <span className="text-[0.875rem] text-muted">ไม่มีจุดที่ต้องแก้ ข้อที่ไม่เกี่ยวกับใบนี้ (เช่น ผู้ซื้อไม่ได้จด VAT) ถูกข้ามไป</span>
+                </>
+              )}
             </div>
           ) : (
             marks.map((m) => (
